@@ -1,0 +1,20 @@
+# RogueEngine is an external dependency — exclude its source and the symlinks pointing into it
+RogueEngine/
+Static
+_Rogue
+dist
+node_modules
+
+# Python caches
+__pycache__/
+*.pyc
+
+# Local Claude Code settings
+.claude/settings.local.json
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
