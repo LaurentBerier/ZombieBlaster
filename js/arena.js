@@ -415,57 +415,43 @@ function addCustomProps(parent) {
     }
 }
 
-// Hazard Vat — uses preloaded prop_hazard_vat_glowing.glb from assetLoader cache.
-// Asset: 1.691 × 2.012 × 1.707, MinY: -1.01
-// Target height 2.0 → scale = 2.0 / 2.012 ≈ 0.994; posY = 1.01 * scale ≈ 1.004
+// Hazard Vat — procedural toon-shaded geometry.
 function createHazardVat(index) {
     const root = new THREE.Group();
     root.name = 'prop_hazard_vat';
 
     const glowColor = index % 2 === 0 ? COLORS.cyan : COLORS.lime;
 
-    const vatModel = cloneAsset('prop_vat');
-    if (vatModel) {
-        // Scale so tallest dimension (2.012) fills the same 2-unit space as the placeholder cylinder
-        const scale = 2.0 / 2.012;
-        vatModel.scale.setScalar(scale);
-        // MinY = -1.01 → lift so base sits at y=0
-        vatModel.position.y = 1.01 * scale;
-        root.add(vatModel);
-    } else {
-        // Fallback placeholder (used when the GLB failed to load)
-        const body = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.8, 0.8, 2.0, 12),
-            createToonMaterial(0x333340)
-        );
-        body.position.y = 1.0;
-        root.add(body);
-        addOutline(body, body.geometry, 1.04);
+    const body = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.8, 0.8, 2.0, 12),
+        createToonMaterial(0x333340)
+    );
+    body.position.y = 1.0;
+    root.add(body);
+    addOutline(body, body.geometry, 1.04);
 
-        const stripeMat = createToonMaterial(COLORS.yellow);
-        const stripe1 = new THREE.Mesh(new THREE.CylinderGeometry(0.82, 0.82, 0.15, 12), stripeMat);
-        stripe1.position.y = 1.7;
-        root.add(stripe1);
-        const stripe2 = stripe1.clone();
-        stripe2.position.y = 0.3;
-        root.add(stripe2);
+    const stripeMat = createToonMaterial(COLORS.yellow);
+    const stripe1 = new THREE.Mesh(new THREE.CylinderGeometry(0.82, 0.82, 0.15, 12), stripeMat);
+    stripe1.position.y = 1.7;
+    root.add(stripe1);
+    const stripe2 = stripe1.clone();
+    stripe2.position.y = 0.3;
+    root.add(stripe2);
 
-        const liquid = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.6, 0.6, 1.6, 12),
-            createToonMaterial(glowColor, glowColor, 1.0)
-        );
-        liquid.position.y = 1.0;
-        root.add(liquid);
+    const liquid = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.6, 0.6, 1.6, 12),
+        createToonMaterial(glowColor, glowColor, 1.0)
+    );
+    liquid.position.y = 1.0;
+    root.add(liquid);
 
-        const porthole = new THREE.Mesh(
-            new THREE.SphereGeometry(0.2, 8, 8),
-            createToonMaterial(glowColor, glowColor, 0.8)
-        );
-        porthole.position.set(0.75, 1.0, 0);
-        root.add(porthole);
-    }
+    const porthole = new THREE.Mesh(
+        new THREE.SphereGeometry(0.2, 8, 8),
+        createToonMaterial(glowColor, glowColor, 0.8)
+    );
+    porthole.position.set(0.75, 1.0, 0);
+    root.add(porthole);
 
-    // Point light always present regardless of mesh source
     const light = new THREE.PointLight(glowColor, 0.6, 6);
     light.position.y = 1.0;
     root.add(light);
@@ -476,53 +462,40 @@ function createHazardVat(index) {
     return root;
 }
 
-// Pump Unit — uses preloaded prop_machinery_pump_unit.glb from assetLoader cache.
-// Asset: 1.835 × 2.009 × 1.255, MinY: -1.007
-// Target height 2.0 → scale = 2.0 / 2.009 ≈ 0.996; posY = 1.007 * scale ≈ 1.003
+// Pump Unit — procedural toon-shaded geometry.
 function createPumpUnit(index) {
     const root = new THREE.Group();
     root.name = 'prop_machinery_pump';
 
-    const pumpModel = cloneAsset('prop_pump');
-    if (pumpModel) {
-        // Scale so tallest dimension (2.009) matches the ~2-unit placeholder height
-        const scale = 2.0 / 2.009;
-        pumpModel.scale.setScalar(scale);
-        // MinY = -1.007 → lift so base sits at y=0
-        pumpModel.position.y = 1.007 * scale;
-        root.add(pumpModel);
-    } else {
-        // Fallback placeholder
-        const body = new THREE.Mesh(
-            new THREE.BoxGeometry(1.8, 1.6, 1.2),
-            createToonMaterial(COLORS.magenta)
-        );
-        body.position.y = 0.8;
-        root.add(body);
-        addOutline(body, body.geometry, 1.03);
+    const body = new THREE.Mesh(
+        new THREE.BoxGeometry(1.8, 1.6, 1.2),
+        createToonMaterial(COLORS.magenta)
+    );
+    body.position.y = 0.8;
+    root.add(body);
+    addOutline(body, body.geometry, 1.03);
 
-        const piston = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.3, 0.35, 0.8, 8),
-            createToonMaterial(0x444455)
-        );
-        piston.position.set(0, 1.8, 0);
-        root.add(piston);
+    const piston = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.3, 0.35, 0.8, 8),
+        createToonMaterial(0x444455)
+    );
+    piston.position.set(0, 1.8, 0);
+    root.add(piston);
 
-        const pipeMat = createToonMaterial(COLORS.cyan, COLORS.cyan, 0.2);
-        [-0.5, 0.5].forEach(x => {
-            const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 1.0, 6), pipeMat);
-            pipe.position.set(x, 1.0, 0.65);
-            pipe.rotation.x = Math.PI / 4;
-            root.add(pipe);
-        });
+    const pipeMat = createToonMaterial(COLORS.cyan, COLORS.cyan, 0.2);
+    [-0.5, 0.5].forEach(x => {
+        const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 1.0, 6), pipeMat);
+        pipe.position.set(x, 1.0, 0.65);
+        pipe.rotation.x = Math.PI / 4;
+        root.add(pipe);
+    });
 
-        const ledGeo = new THREE.SphereGeometry(0.06, 6, 6);
-        const led1 = new THREE.Mesh(ledGeo, createToonMaterial(COLORS.magenta, COLORS.magenta, 1.0));
-        const led2 = new THREE.Mesh(ledGeo, createToonMaterial(COLORS.cyan, COLORS.cyan, 1.0));
-        led1.position.set(-0.2, 2.25, 0);
-        led2.position.set(0.2, 2.25, 0);
-        root.add(led1, led2);
-    }
+    const ledGeo = new THREE.SphereGeometry(0.06, 6, 6);
+    const led1 = new THREE.Mesh(ledGeo, createToonMaterial(COLORS.magenta, COLORS.magenta, 1.0));
+    const led2 = new THREE.Mesh(ledGeo, createToonMaterial(COLORS.cyan, COLORS.cyan, 1.0));
+    led1.position.set(-0.2, 2.25, 0);
+    led2.position.set(0.2, 2.25, 0);
+    root.add(led1, led2);
 
     return root;
 }

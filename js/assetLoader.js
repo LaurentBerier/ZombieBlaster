@@ -1,0 +1,232 @@
+// ============================================
+// Centralized Asset Loader
+// Preloads all GLB models (and roguePrefab JSON) before gameplay starts.
+// Consumers call cloneAsset(id) to get independent
+// scene-graph copies ready for Three.js insertion.
+// ============================================
+
+import { GLTFLoader } from './lib/GLTFLoader.js';
+import { cloneSkinned } from './lib/SkeletonUtils.js';
+
+// Asset registry: id -> source descriptor (served from game root)
+const ASSET_MANIFEST = {
+    weapon_biohazard: { type: 'gltf', url: 'assets/Weapons/1_Neon_Biohazard_Blaste_0415181024_texture.glb' },
+    weapon_plasma_coil: { type: 'gltf', url: 'assets/Weapons/2_Meshy_AI_Neon_Coil_Plasma_Rifl_0416160536_texture.glb' },
+    weapon_ember_blaster: { type: 'gltf', url: 'assets/Weapons/3_Weapon_Neon_Ember_Blaster_0417161106_texture.glb' },
+    weapon_neon_plasma_blaster: { type: 'gltf', url: 'assets/Weapons/4_Meshy_AI_Neon_Plasma_Blaster_0416221538_texture.glb' },
+    weapon_rogue_prefab: { type: 'object', url: 'assets/imports/PlayerCharacter.roguePrefab' },
+    enemy_zombie:      { type: 'gltf', url: 'assets/Characters/Zombie_1/Zombie_1_Unsteady_Walk_withSkin.glb' },
+};
+
+// Loaded and standardized entries, keyed by asset id.
+// Each entry: { scene, animations: THREE.AnimationClip[], skinned: boolean }
+const assetCache = new Map();
+
+// Apply shadow casting/receiving to every mesh in the scene graph.
+// Called once per loaded asset before it enters the cache.
+// Returns true if any SkinnedMesh was found (caller needs to pick the right
+// clone path — plain Object3D.clone() doesn't rebind skeletons).
+function standardize(rootObject) {
+    let skinned = false;
+    rootObject.traverse(child => {
+        if (child.isMesh) {
+            child.castShadow = true;
+            child.receiveShadow = true;
+            child.frustumCulled = true;
+        }
+        if (child.isSkinnedMesh) skinned = true;
+    });
+    return skinned;
+}
+
+function friendlyName(url) {
+    const parts = url.split('/');
+    return parts[parts.length - 1];
+}
+
+/**
+ * Preload GLB / roguePrefab assets. Returns a Promise that resolves when
+ * every load has either succeeded or failed (never rejects — missing
+ * assets fall back to placeholder geometry in their respective modules).
+ *
+ * @param {object} [options]
+ * @param {Array<{id?: string, url: string, type?: 'gltf'|'object'}>} [options.extras]
+ *   Additional asset descriptors to load alongside the manifest. Used for
+ *   designer-imported custom props discovered in level data at boot time.
+ *   If `id` is omitted, the URL is used as the cache key.
+ * @param {(info: {
+ *   done: number,
+ *   total: number,
+ *   fraction: number,
+ *   currentName: string,
+ *   currentUrl: string,
+ *   bytesLoaded: number,
+ *   bytesTotal: number,
+ * }) => void} [options.onProgress]
+ *   Called on each byte-progress event and each load completion.
+ */
+export function preloadAssets({ extras = [], onProgress } = {}) {
+    const all = [
+        ...Object.entries(ASSET_MANIFEST).map(([id, d]) => ({ id, type: d.type, url: d.url })),
+        ...extras.map(e => ({ id: e.id ?? e.url, type: e.type ?? 'gltf', url: e.url })),
+    ];
+
+    // De-duplicate by id so level files that reuse the same custom prop don't
+    // trigger redundant fetches.
+    const seen = new Set();
+    const entries = [];
+    for (const e of all) {
+        if (seen.has(e.id)) continue;
+        seen.add(e.id);
+        entries.push({ ...e, displayName: friendlyName(e.url) });
+    }
+
+    const total = entries.length;
+    if (total === 0) {
+        onProgress?.({
+            done: 0, total: 0, fraction: 1,
+            currentName: '', currentUrl: '',
+            bytesLoaded: 0, bytesTotal: 0,
+        });
+        return Promise.resolve();
+    }
+
+    const loader = new GLTFLoader();
+    const objectLoader = new THREE.ObjectLoader();
+
+    // Per-entry state for aggregated byte-progress display.
+    const states = entries.map(e => ({
+        id: e.id, url: e.url, type: e.type,
+        displayName: e.displayName,
+        loadedBytes: 0, totalBytes: 0,
+        done: false,
+    }));
+    let doneCount = 0;
+
+    const emit = (idx) => {
+        const s = states[idx];
+        let bytesLoaded = 0;
+        let bytesTotal = 0;
+        for (const x of states) {
+            bytesLoaded += x.loadedBytes;
+            bytesTotal += x.totalBytes;
+        }
+        onProgress?.({
+            done: doneCount,
+            total,
+            fraction: doneCount / total,
+            currentName: s.displayName,
+            currentUrl: s.url,
+            bytesLoaded,
+            bytesTotal,
+        });
+    };
+
+    const promises = states.map((s, idx) => new Promise(resolve => {
+        const handleProgress = (ev) => {
+            if (!ev) return;
+            if (ev.lengthComputable) {
+                s.loadedBytes = ev.loaded;
+                s.totalBytes = ev.total;
+            } else if (typeof ev.loaded === 'number') {
+                s.loadedBytes = ev.loaded;
+            }
+            emit(idx);
+        };
+        const finish = () => {
+            if (s.done) return;
+            s.done = true;
+            if (s.totalBytes > 0) s.loadedBytes = s.totalBytes;
+            doneCount++;
+            emit(idx);
+            resolve();
+        };
+
+        if (s.type === 'gltf') {
+            loader.load(
+                s.url,
+                gltf => {
+                    const skinned = standardize(gltf.scene);
+                    assetCache.set(s.id, {
+                        scene: gltf.scene,
+                        animations: gltf.animations || [],
+                        skinned,
+                    });
+                    finish();
+                },
+                handleProgress,
+                err => {
+                    console.warn(`[AssetLoader] Failed to load "${s.id}" (${s.url}):`, err?.message ?? err);
+                    finish();
+                }
+            );
+            return;
+        }
+
+        fetch(s.url)
+            .then(resp => {
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                return resp.json();
+            })
+            .then(data => {
+                const parsed = objectLoader.parse(data);
+                const skinned = standardize(parsed);
+                assetCache.set(s.id, { scene: parsed, animations: [], skinned });
+                finish();
+            })
+            .catch(err => {
+                console.warn(`[AssetLoader] Failed to load "${s.id}" (${s.url}):`, err?.message ?? err);
+                finish();
+            });
+    }));
+
+    return Promise.all(promises);
+}
+
+/**
+ * Clone a preloaded asset for independent use in the scene.
+ * Returns null if the asset failed to load (caller should use
+ * placeholder geometry instead).
+ *
+ * Skinned assets go through SkeletonUtils.clone so each instance has
+ * its own bone hierarchy — required for per-enemy AnimationMixers.
+ *
+ * @param {string} id  Key from ASSET_MANIFEST or a custom-prop URL
+ * @returns {THREE.Object3D | null}
+ */
+export function cloneAsset(id) {
+    const entry = assetCache.get(id);
+    if (!entry) return null;
+
+    const clone = entry.skinned ? cloneSkinned(entry.scene) : entry.scene.clone();
+    // Re-apply shadow properties — clone() copies geometry/material
+    // references but userData flags must be re-set on new nodes.
+    clone.traverse(child => {
+        if (child.isMesh) {
+            child.castShadow = true;
+            child.receiveShadow = true;
+        }
+    });
+    return clone;
+}
+
+/**
+ * Get the animation clips associated with a preloaded asset.
+ * Animations are shared (AnimationMixer binds clips to targets at play time)
+ * so it's safe to pass the same clip to multiple per-instance mixers.
+ *
+ * @param {string} id
+ * @returns {THREE.AnimationClip[]}  Empty array if asset missing or has no clips
+ */
+export function getAssetAnimations(id) {
+    const entry = assetCache.get(id);
+    return entry ? entry.animations : [];
+}
+
+/**
+ * True once the asset has been loaded (including failures — callers
+ * should still check cloneAsset for a non-null result).
+ */
+export function isAssetLoaded(id) {
+    return assetCache.has(id);
+}
