@@ -1,7 +1,9 @@
 """Local static server with correct MIME types for ES modules (Windows-safe).
 
-Also exposes POST /api/save-level so tools/level-editor.html can persist edits
-straight into data/levelData.json.
+Also serves the sibling Three.js editor under /editor/ + /build/ + /examples/ +
+/files/ so it shares the origin with the game (no CORS), and exposes
+POST /api/save-level so the editor's "Save Zombie Blaster Level" menu item can
+persist edits straight into data/levelData.json.
 """
 import errno
 import http.server
@@ -12,6 +14,11 @@ import socketserver
 # Always serve the game folder, even if the shell cwd is elsewhere (e.g. wrong terminal tab).
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 os.chdir(_ROOT)
+
+# Sibling Three.js editor checkout. Four URL prefixes get mapped onto its tree
+# so the editor's importmap (../build/, ../examples/jsm/, ../files/) keeps working.
+_EDITOR_ROOT = os.path.normpath(os.path.join(_ROOT, "..", "three.js_Editor"))
+_EDITOR_PREFIXES = ("/editor/", "/build/", "/examples/", "/files/")
 
 
 def _requested_port() -> int:
@@ -40,6 +47,27 @@ _extensions.update(
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     extensions_map = _extensions
+
+    def translate_path(self, path: str) -> str:
+        clean = path.split("?", 1)[0].split("#", 1)[0]
+        # Bare "/editor" → redirect via the parent class would be cleaner, but
+        # treating it as "/editor/" here gives the editor's index.html when the
+        # user types just /editor.
+        if clean == "/editor":
+            clean = "/editor/"
+        for prefix in _EDITOR_PREFIXES:
+            if clean.startswith(prefix):
+                rel = clean[1:]  # strip leading "/"
+                # Build the on-disk path under _EDITOR_ROOT. normpath collapses
+                # any "..", and the explicit startswith check below blocks
+                # traversal outside the editor tree.
+                candidate = os.path.normpath(os.path.join(_EDITOR_ROOT, *rel.split("/")))
+                if candidate == _EDITOR_ROOT or candidate.startswith(_EDITOR_ROOT + os.sep):
+                    return candidate
+                # Path traversal attempt — fall through to default handler so
+                # the request 404s against the game root.
+                break
+        return super().translate_path(path)
 
     def do_POST(self) -> None:
         path = self.path.split("?", 1)[0]
