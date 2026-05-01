@@ -1,0 +1,249 @@
+{
+  "version": 1,
+  "rooms": [
+    {
+      "id": "main_hall",
+      "cx": 0,
+      "cz": 0,
+      "w": 63,
+      "h": 8,
+      "d": 55
+    }
+  ],
+  "corridors": [],
+  "props": {
+    "vats": [],
+    "pumps": []
+  },
+  "customProps": [
+    {
+      "id": "prop_floor_metal_1",
+      "asset": "Floor_Metal_1.glb",
+      "x": -0.0926,
+      "y": 0,
+      "z": 4.0136,
+      "scale": 2.7571
+    },
+    {
+      "id": "prop_wall_metal_1",
+      "asset": "Wall_Metal_1.glb",
+      "x": -11.7776,
+      "y": 0,
+      "z": 20.0081,
+      "scale": 4
+    },
+    {
+      "id": "prop_wall_cement_long_1",
+      "asset": "Wall_Cement_Long_1.glb",
+      "x": -11.2103,
+      "y": 1.5268,
+      "z": -9.1012,
+      "scale": 4
+    },
+    {
+      "id": "prop_wall_ciment_1",
+      "asset": "wall_ciment_1.glb",
+      "x": 6.0278,
+      "y": 0,
+      "z": 18.3381,
+      "scale": 4
+    },
+    {
+      "id": "prop_wall_ciment_2",
+      "asset": "Wall_ciment_2.glb",
+      "x": 2.2931,
+      "y": 1.806,
+      "z": -2.0392,
+      "rx": -3.1416,
+      "ry": -1.5673,
+      "rz": -3.1416,
+      "scale": 4.1895
+    },
+    {
+      "id": "custom_0",
+      "asset": "Floor_Metal_1.glb",
+      "x": -0.0926,
+      "y": 0,
+      "z": -6.2651,
+      "scale": -2.7571
+    },
+    {
+      "id": "custom_1",
+      "asset": "Wall_ciment_2.glb",
+      "x": -2.6841,
+      "y": 1.5688,
+      "z": -4.0053,
+      "ry": 1.5706,
+      "scale": 5.5
+    },
+    {
+      "id": "custom_2",
+      "asset": "Floor_Metal_2.glb",
+      "x": 26.5548,
+      "y": -1.0104,
+      "z": 13.0928,
+      "scale": -4
+    },
+    {
+      "id": "custom_4",
+      "asset": "Floor_Metal_4.glb",
+      "x": 16.5047,
+      "y": -3.3123,
+      "z": 12.0974,
+      "scale": 4
+    },
+    {
+      "id": "custom_6",
+      "asset": "Wall_ciment_3.glb",
+      "x": -0.9108,
+      "y": 1.7712,
+      "z": 6.7035,
+      "rx": -3.1416,
+      "rz": -3.1416,
+      "scale": 4
+    },
+    {
+      "id": "custom_7",
+      "asset": "Wall_Ciment_4.glb",
+      "x": 2.0796,
+      "y": 1.7401,
+      "z": 5.7288,
+      "ry": -1.5706,
+      "scale": 5.5
+    },
+    {
+      "id": "custom_8",
+      "asset": "Wall_Metal_2.glb",
+      "x": 18.8704,
+      "y": 1,
+      "z": 16.4366,
+      "scale": 4
+    },
+    {
+      "id": "custom_3",
+      "asset": "Floor_Metal_1.glb",
+      "x": -5.5297,
+      "y": -0.2258,
+      "z": 4.5546,
+      "ry": 1.5706,
+      "scale": 2.7571
+    },
+    {
+      "id": "custom_5",
+      "asset": "Wall_ciment_3.glb",
+      "x": -11.4797,
+      "y": 1.7712,
+      "z": -13.4688,
+      "rx": -3.1416,
+      "rz": -3.1416,
+      "scale": 4
+    },
+    {
+      "id": "custom_9",
+      "asset": "Wall_Ciment_4.glb",
+      "x": 2.3979,
+      "y": 1.7401,
+      "z": -9.6202,
+      "ry": -1.5706,
+      "scale": 5.5
+    },
+    {
+      "id": "custom_10",
+      "asset": "Floor_Metal_1.glb",
+      "x": -0.0926,
+      "y": 0,
+      "z": -11.3191,
+      "rx": -3.1416,
+      "rz": -3.1416,
+      "scale": 2.7571
+    },
+    {
+      "id": "custom_11",
+      "asset": "Floor_Metal_1.glb",
+      "x": -5.1243,
+      "y": 0,
+      "z": -11.3191,
+      "ry": 1.5706,
+      "scale": 2.7571
+    },
+    {
+      "id": "custom_12",
+      "asset": "Floor_Metal_1.glb",
+      "x": -0.0926,
+      "y": 0,
+      "z": -1.0243,
+      "scale": 2.7571
+    }
+  ],
+  "enemySpawns": [
+    {
+      "id": "spawn_0",
+      "x": -28.5,
+      "z": -24.5
+    },
+    {
+      "id": "spawn_1",
+      "x": 28.5,
+      "z": -24.5
+    },
+    {
+      "id": "spawn_2",
+      "x": -28.5,
+      "z": 24.5
+    },
+    {
+      "id": "spawn_3",
+      "x": 28.5,
+      "z": 24.5
+    }
+  ],
+  "platforms": [],
+  "lights": [
+    {
+      "id": "Ambient Light",
+      "x": 0,
+      "y": 0,
+      "z": 0,
+      "color": "0xFFFFFF",
+      "intensity": 1,
+      "distance": 15
+    },
+    {
+      "id": "Point Light",
+      "x": 2.161,
+      "y": 3.01,
+      "z": -1.9573,
+      "color": "0xFFFFFF",
+      "intensity": 1,
+      "distance": 15
+    },
+    {
+      "id": "light_0",
+      "x": -0.9509,
+      "y": 2.867,
+      "z": 7.4515,
+      "color": "0xFFFFFF",
+      "intensity": 1,
+      "distance": 15
+    },
+    {
+      "id": "light_1",
+      "x": -2.256,
+      "y": 3.01,
+      "z": -3.4259,
+      "color": "0xFFFFFF",
+      "intensity": 1,
+      "distance": 15
+    }
+  ],
+  "traps": {
+    "crushers": [],
+    "acidPools": [],
+    "pipeBursts": []
+  },
+  "playerSpawn": {
+    "x": 0,
+    "y": 1.7,
+    "z": 0
+  }
+}

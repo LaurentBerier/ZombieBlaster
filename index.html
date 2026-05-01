@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zombie Blaster: Underground Monsters</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <!-- Loading Screen -->
+    <div id="loading-screen">
+        <div class="loading-content">
+            <h1 class="game-title">ZOMBIE BLASTER</h1>
+            <h2 class="game-subtitle">UNDERGROUND MONSTERS</h2>
+            <div class="loading-bar-container">
+                <div class="loading-bar" id="loading-bar"></div>
+            </div>
+            <p class="loading-text" id="loading-text">INITIALIZING...</p>
+        </div>
+    </div>
+
+    <!-- Title Screen -->
+    <div id="title-screen" class="hidden">
+        <div class="title-content">
+            <h1 class="game-title glitch">ZOMBIE BLASTER</h1>
+            <h2 class="game-subtitle">UNDERGROUND MONSTERS</h2>
+            <p class="tagline">"Clean up the mess. Save the Silo."</p>
+            <div class="menu-buttons">
+                <button class="btn-primary" id="btn-start">START GAME</button>
+                <button class="btn-secondary" id="btn-controls">CONTROLS</button>
+            </div>
+            <div class="high-score-display">
+                <span class="label">HIGH SCORE:</span>
+                <span class="value" id="title-high-score">0</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Controls Overlay -->
+    <div id="controls-overlay" class="hidden">
+        <div class="controls-content">
+            <h2>CONTROLS</h2>
+            <div class="control-list">
+                <div class="control-row"><span class="key">WASD</span><span class="action">MOVE</span></div>
+                <div class="control-row"><span class="key">MOUSE</span><span class="action">AIM</span></div>
+                <div class="control-row"><span class="key">LEFT CLICK</span><span class="action">FIRE</span></div>
+                <div class="control-row"><span class="key">SCROLL / 1-4</span><span class="action">SWAP WEAPON</span></div>
+                <div class="control-row"><span class="key">SPACE</span><span class="action">JUMP</span></div>
+                <div class="control-row"><span class="key">SHIFT</span><span class="action">DASH</span></div>
+                <div class="control-row"><span class="key">R</span><span class="action">RELOAD</span></div>
+                <div class="control-row"><span class="key">ESC</span><span class="action">PAUSE</span></div>
+            </div>
+            <button class="btn-primary" id="btn-close-controls">GOT IT!</button>
+        </div>
+    </div>
+
+    <!-- HUD -->
+    <div id="hud" class="hidden">
+        <div id="hud-top">
+            <div id="score-display">
+                <span class="label">SCORE</span>
+                <span class="value" id="hud-score">0</span>
+            </div>
+            <div id="combo-display">
+                <span class="combo-label" id="combo-label">COMBO</span>
+                <span class="combo-value" id="combo-multiplier">x1</span>
+            </div>
+            <div id="wave-display">
+                <span class="label">WAVE</span>
+                <span class="value" id="hud-wave">1</span>
+            </div>
+        </div>
+        <div id="hud-bottom">
+            <div id="health-container">
+                <span class="label">HP</span>
+                <div class="bar-bg">
+                    <div class="bar-fill health-fill" id="health-bar"></div>
+                </div>
+                <span class="bar-value" id="health-value">100</span>
+            </div>
+            <div id="weapon-display">
+                <span class="weapon-name" id="weapon-name">FRANKEN-GUN</span>
+                <span class="ammo-count" id="ammo-count">30/120</span>
+            </div>
+            <div id="dash-container">
+                <span class="label">DASH</span>
+                <div class="bar-bg">
+                    <div class="bar-fill dash-fill" id="dash-bar"></div>
+                </div>
+            </div>
+        </div>
+        <div id="crosshair">+</div>
+        <div id="hit-marker" class="hidden">X</div>
+        <div id="damage-overlay" class="hidden"></div>
+        <div id="wave-announce" class="hidden">
+            <span class="wave-text" id="wave-announce-text">WAVE 1</span>
+        </div>
+        <div id="boss-announce" class="hidden">
+            <span class="boss-text">BOSS INCOMING!</span>
+        </div>
+        <div id="weapon-switch-indicator" class="hidden">
+            <div class="weapon-slots" id="weapon-slots"></div>
+        </div>
+        <div id="control-hints">
+            <span>WASD Move | MOUSE Aim | CLICK Fire | SHIFT Dash | SPACE Jump | 1-4 Weapons</span>
+        </div>
+    </div>
+
+    <!-- Pause Screen -->
+    <div id="pause-screen" class="hidden">
+        <div class="pause-content">
+            <h2>PAUSED</h2>
+            <button class="btn-primary" id="btn-resume">RESUME</button>
+            <button class="btn-secondary" id="btn-quit">QUIT TO MENU</button>
+        </div>
+    </div>
+
+    <!-- Game Over Screen -->
+    <div id="gameover-screen" class="hidden">
+        <div class="gameover-content">
+            <h1 class="gameover-title">GAME OVER</h1>
+            <div class="final-stats">
+                <div class="stat-row"><span class="label">FINAL SCORE</span><span class="value" id="final-score">0</span></div>
+                <div class="stat-row"><span class="label">WAVES SURVIVED</span><span class="value" id="final-waves">0</span></div>
+                <div class="stat-row"><span class="label">MAX COMBO</span><span class="value" id="final-combo">0</span></div>
+                <div class="stat-row"><span class="label">ENEMIES SLAIN</span><span class="value" id="final-kills">0</span></div>
+            </div>
+            <div class="high-score-display">
+                <span class="label">HIGH SCORE:</span>
+                <span class="value" id="gameover-high-score">0</span>
+            </div>
+            <div id="new-high-score" class="hidden">NEW HIGH SCORE!</div>
+            <div class="menu-buttons">
+                <button class="btn-primary" id="btn-retry">PLAY AGAIN</button>
+                <button class="btn-secondary" id="btn-menu">MAIN MENU</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Three.js Canvas -->
+    <script src="js/lib/three.min.js"></script>
+    <script type="module" src="js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,113 @@
+// ============================================
+// Scene, Camera, Renderer, and Visual Pipeline
+// Toon shading with outline effect
+// ============================================
+
+const COLORS = {
+    magenta: 0xFF00FF,
+    cyan: 0x00FFFF,
+    lime: 0x7FFF00,
+    orange: 0xFF7F00,
+    violet: 0xBF00FF,
+    yellow: 0xFFFF00,
+    hotPink: 0xFF1493,
+    darkBg: 0x111111,
+    grey: 0x555555,
+    lightGrey: 0xCCCCCC,
+    red: 0xFF3B30,
+    green: 0x4CD964,
+    white: 0xFFFFFF,
+    black: 0x000000,
+};
+
+// Neon color palette for environment variety
+const NEON_PALETTE = [COLORS.magenta, COLORS.cyan, COLORS.lime, COLORS.orange, COLORS.violet, COLORS.hotPink, COLORS.yellow];
+
+let scene, camera, renderer, clock;
+let outlineMeshes = []; // Track meshes that need outlines
+
+function initScene() {
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0d0d20);
+    scene.fog = new THREE.FogExp2(0x0d0d20, 0.008);
+
+    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 200);
+    camera.position.set(0, 1.7, 0);
+
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.6;
+    document.body.prepend(renderer.domElement);
+
+    clock = new THREE.Clock();
+
+    // Ambient light - bright enough for underground visibility
+    const ambient = new THREE.AmbientLight(0x3a2a6e, 1.0);
+    scene.add(ambient);
+
+    // Main directional light
+    const dirLight = new THREE.DirectionalLight(0x9977dd, 0.8);
+    dirLight.position.set(10, 20, 10);
+    scene.add(dirLight);
+
+    // Hemisphere fill light for visible floor/ceiling contrast
+    const hemiLight = new THREE.HemisphereLight(0x5533bb, 0x221144, 0.6);
+    scene.add(hemiLight);
+
+    window.addEventListener('resize', onResize);
+
+    return { scene, camera, renderer, clock };
+}
+
+function onResize() {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+// Create a toon-shaded material matching the style guide
+function createToonMaterial(color, emissiveColor = 0x000000, emissiveIntensity = 0) {
+    // Use MeshStandardMaterial with low metalness and high roughness for a matte toon-like look
+    const mat = new THREE.MeshStandardMaterial({
+        color: color,
+        roughness: 0.8,
+        metalness: 0.0,
+        emissive: emissiveColor,
+        emissiveIntensity: emissiveIntensity,
+        flatShading: true, // Gives the comic-book hard-edge feel
+    });
+    return mat;
+}
+
+// Create an outline mesh for the comic-book 2px outline effect (BackSide technique)
+function createOutlineMesh(geometry, scale = 1.04) {
+    const outlineMat = new THREE.MeshBasicMaterial({
+        color: 0x000000,
+        side: THREE.BackSide,
+    });
+    const outline = new THREE.Mesh(geometry, outlineMat);
+    outline.scale.multiplyScalar(scale);
+    outline.renderOrder = -1;
+    return outline;
+}
+
+// Add outline to a mesh and track it
+function addOutline(parent, geometry, scale = 1.05) {
+    const outline = createOutlineMesh(geometry, scale);
+    parent.add(outline);
+    outlineMeshes.push(outline);
+    return outline;
+}
+
+export {
+    scene, camera, renderer, clock,
+    COLORS, NEON_PALETTE,
+    initScene,
+    createToonMaterial,
+    createOutlineMesh,
+    addOutline,
+};

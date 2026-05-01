@@ -1,0 +1,697 @@
+/* ============================================
+   ZOMBIE BLASTER: UNDERGROUND MONSTERS
+   Comic-Book Arcade FPS Stylesheet
+   ============================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Bangers&family=Russo+One&family=Press+Start+2P&display=swap');
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+body {
+    overflow: hidden;
+    background: #111111;
+    font-family: 'Russo One', 'Arial Black', sans-serif;
+    color: #FFFFFF;
+    cursor: none;
+}
+
+canvas {
+    display: block;
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 0;
+}
+
+.hidden {
+    display: none !important;
+}
+
+/* ============================================
+   LOADING SCREEN
+   ============================================ */
+#loading-screen {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    background: #111111;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.loading-content {
+    text-align: center;
+}
+
+.game-title {
+    font-family: 'Bangers', cursive;
+    font-size: 72px;
+    color: #FF00FF;
+    text-shadow: 4px 4px 0px #000, -2px -2px 0px #00FFFF, 0 0 20px rgba(255,0,255,0.5);
+    letter-spacing: 4px;
+    -webkit-text-stroke: 2px #000;
+}
+
+.game-subtitle {
+    font-family: 'Bangers', cursive;
+    font-size: 36px;
+    color: #7FFF00;
+    text-shadow: 2px 2px 0px #000, 0 0 10px rgba(127,255,0,0.5);
+    letter-spacing: 2px;
+    margin-top: 8px;
+}
+
+.loading-bar-container {
+    width: 400px;
+    height: 24px;
+    border: 3px solid #FF00FF;
+    border-radius: 4px;
+    margin: 32px auto 16px;
+    background: #222;
+    overflow: hidden;
+}
+
+.loading-bar {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, #FF00FF, #00FFFF, #7FFF00);
+    transition: width 0.3s ease;
+    border-radius: 2px;
+}
+
+.loading-text {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 12px;
+    color: #00FFFF;
+    text-shadow: 0 0 8px rgba(0,255,255,0.5);
+    max-width: min(640px, 90vw);
+    margin: 0 auto;
+    line-height: 1.6;
+    word-break: break-word;
+    min-height: 1.6em; /* reserve space so the bar doesn't jump when text wraps */
+}
+
+/* ============================================
+   TITLE SCREEN
+   ============================================ */
+#title-screen {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    background: radial-gradient(ellipse at center, #1a0a2e 0%, #111111 70%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 900;
+}
+
+.title-content {
+    text-align: center;
+}
+
+.tagline {
+    font-family: 'Russo One', sans-serif;
+    font-size: 18px;
+    color: #CCCCCC;
+    margin-top: 16px;
+    font-style: italic;
+}
+
+.glitch {
+    animation: glitch 3s infinite;
+}
+
+@keyframes glitch {
+    0%, 90%, 100% { transform: translate(0); }
+    92% { transform: translate(-3px, 2px); text-shadow: 4px 4px 0px #000, 3px -2px 0px #00FFFF, -3px 2px 0px #FF00FF; }
+    94% { transform: translate(3px, -2px); }
+    96% { transform: translate(-2px, -1px); text-shadow: 4px 4px 0px #000, -3px 2px 0px #00FFFF, 3px -2px 0px #7FFF00; }
+    98% { transform: translate(2px, 1px); }
+}
+
+.menu-buttons {
+    margin-top: 40px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+}
+
+.btn-primary, .btn-secondary {
+    font-family: 'Bangers', cursive;
+    font-size: 24px;
+    letter-spacing: 2px;
+    padding: 12px 48px;
+    border: 3px solid #000;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    min-width: 260px;
+    text-shadow: 1px 1px 0 #000;
+}
+
+.btn-primary {
+    background: #FF00FF;
+    color: #FFF;
+    box-shadow: 0 4px 0 #990099, 0 0 15px rgba(255,0,255,0.3);
+}
+
+.btn-primary:hover {
+    background: #FF1493;
+    transform: translateY(-2px);
+    box-shadow: 0 6px 0 #990099, 0 0 25px rgba(255,0,255,0.5);
+}
+
+.btn-primary:active {
+    transform: translateY(2px);
+    box-shadow: 0 2px 0 #990099;
+}
+
+.btn-secondary {
+    background: #333;
+    color: #00FFFF;
+    border-color: #00FFFF;
+    box-shadow: 0 4px 0 #006666, 0 0 10px rgba(0,255,255,0.2);
+}
+
+.btn-secondary:hover {
+    background: #444;
+    transform: translateY(-2px);
+    box-shadow: 0 6px 0 #006666, 0 0 20px rgba(0,255,255,0.4);
+}
+
+.btn-secondary:active {
+    transform: translateY(2px);
+    box-shadow: 0 2px 0 #006666;
+}
+
+.high-score-display {
+    margin-top: 32px;
+    font-family: 'Press Start 2P', monospace;
+    font-size: 14px;
+}
+
+.high-score-display .label {
+    color: #FFFF00;
+}
+
+.high-score-display .value {
+    color: #FF1493;
+    margin-left: 8px;
+}
+
+/* ============================================
+   CONTROLS OVERLAY
+   ============================================ */
+#controls-overlay {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    background: rgba(17,17,17,0.95);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 950;
+}
+
+.controls-content {
+    text-align: center;
+    background: #1a1a1a;
+    border: 3px solid #FF00FF;
+    border-radius: 4px;
+    padding: 40px;
+    box-shadow: 0 0 30px rgba(255,0,255,0.3);
+}
+
+.controls-content h2 {
+    font-family: 'Bangers', cursive;
+    font-size: 42px;
+    color: #FF00FF;
+    margin-bottom: 24px;
+    text-shadow: 2px 2px 0 #000;
+}
+
+.control-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 32px;
+}
+
+.control-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 32px;
+    font-size: 18px;
+}
+
+.control-row .key {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 12px;
+    background: #333;
+    color: #00FFFF;
+    padding: 6px 12px;
+    border: 2px solid #00FFFF;
+    border-radius: 4px;
+    min-width: 140px;
+    text-align: center;
+}
+
+.control-row .action {
+    font-family: 'Russo One', sans-serif;
+    color: #7FFF00;
+    min-width: 140px;
+    text-align: left;
+}
+
+/* ============================================
+   HUD
+   ============================================ */
+#hud {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+    z-index: 100;
+}
+
+#hud-top {
+    position: absolute;
+    top: 16px;
+    left: 0;
+    right: 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    padding: 0 24px;
+}
+
+#score-display {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+}
+
+#score-display .label {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 10px;
+    color: #00FFFF;
+    text-shadow: 0 0 6px rgba(0,255,255,0.5);
+}
+
+#score-display .value {
+    font-family: 'Bangers', cursive;
+    font-size: 42px;
+    color: #00FFFF;
+    text-shadow: 2px 2px 0 #000, 0 0 10px rgba(0,255,255,0.5);
+}
+
+#combo-display {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    transition: transform 0.1s ease;
+}
+
+#combo-display.bump {
+    transform: scale(1.3);
+}
+
+.combo-label {
+    font-family: 'Bangers', cursive;
+    font-size: 18px;
+    color: #7FFF00;
+    text-shadow: 1px 1px 0 #000, 0 0 8px rgba(127,255,0,0.5);
+}
+
+.combo-value {
+    font-family: 'Bangers', cursive;
+    font-size: 32px;
+    color: #FF1493;
+    text-shadow: 2px 2px 0 #000, 0 0 15px rgba(255,20,147,0.5);
+}
+
+#wave-display {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+}
+
+#wave-display .label {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 10px;
+    color: #FFFF00;
+    text-shadow: 0 0 6px rgba(255,255,0,0.5);
+}
+
+#wave-display .value {
+    font-family: 'Bangers', cursive;
+    font-size: 42px;
+    color: #FFFF00;
+    text-shadow: 2px 2px 0 #000, 0 0 10px rgba(255,255,0,0.5);
+}
+
+#hud-bottom {
+    position: absolute;
+    bottom: 24px;
+    left: 0;
+    right: 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    padding: 0 24px;
+}
+
+#health-container, #dash-container {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 180px;
+}
+
+#health-container .label, #dash-container .label {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 10px;
+    color: #FF1493;
+}
+
+.bar-bg {
+    width: 180px;
+    height: 16px;
+    background: #333;
+    border: 2px solid #000;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.bar-fill {
+    height: 100%;
+    transition: width 0.2s ease;
+    border-radius: 2px;
+}
+
+.health-fill {
+    width: 100%;
+    background: linear-gradient(90deg, #FF3B30, #FF1493);
+    box-shadow: 0 0 8px rgba(255,20,147,0.5);
+}
+
+.dash-fill {
+    width: 100%;
+    background: linear-gradient(90deg, #00FFFF, #7FFF00);
+    box-shadow: 0 0 8px rgba(0,255,255,0.5);
+}
+
+.bar-value {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 10px;
+    color: #FFF;
+    margin-left: 8px;
+}
+
+#weapon-display {
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.weapon-name {
+    font-family: 'Bangers', cursive;
+    font-size: 28px;
+    color: #FF1493;
+    text-shadow: 2px 2px 0 #000, 0 0 10px rgba(255,20,147,0.4);
+}
+
+.ammo-count {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 16px;
+    color: #00FFFF;
+    text-shadow: 0 0 6px rgba(0,255,255,0.5);
+}
+
+#crosshair {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 28px;
+    color: #7FFF00;
+    text-shadow: 0 0 8px rgba(127,255,0,0.8);
+    font-weight: bold;
+    pointer-events: none;
+}
+
+#hit-marker {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 24px;
+    color: #FF1493;
+    text-shadow: 0 0 10px rgba(255,20,147,0.8);
+    font-weight: bold;
+    pointer-events: none;
+    animation: hitMarkerPop 0.2s ease-out forwards;
+}
+
+@keyframes hitMarkerPop {
+    0% { transform: translate(-50%, -50%) scale(1.5); opacity: 1; }
+    100% { transform: translate(-50%, -50%) scale(0.8); opacity: 0; }
+}
+
+#damage-overlay {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    background: radial-gradient(ellipse at center, transparent 40%, rgba(255,0,0,0.4) 100%);
+    pointer-events: none;
+    animation: damageFlash 0.3s ease-out forwards;
+}
+
+@keyframes damageFlash {
+    0% { opacity: 1; }
+    100% { opacity: 0; }
+}
+
+#wave-announce {
+    position: absolute;
+    top: 30%;
+    left: 50%;
+    transform: translateX(-50%);
+    text-align: center;
+    animation: waveAnnounce 2s ease-out forwards;
+}
+
+.wave-text {
+    font-family: 'Bangers', cursive;
+    font-size: 72px;
+    color: #FFFF00;
+    text-shadow: 4px 4px 0 #000, 0 0 30px rgba(255,255,0,0.5);
+    -webkit-text-stroke: 2px #000;
+}
+
+@keyframes waveAnnounce {
+    0% { transform: translateX(-50%) scale(0.5); opacity: 0; }
+    20% { transform: translateX(-50%) scale(1.2); opacity: 1; }
+    30% { transform: translateX(-50%) scale(1); }
+    70% { opacity: 1; }
+    100% { transform: translateX(-50%) scale(1); opacity: 0; }
+}
+
+#boss-announce {
+    position: absolute;
+    top: 25%;
+    left: 50%;
+    transform: translateX(-50%);
+    animation: bossAnnounce 3s ease-out forwards;
+}
+
+.boss-text {
+    font-family: 'Bangers', cursive;
+    font-size: 64px;
+    color: #FF00FF;
+    text-shadow: 4px 4px 0 #000, 0 0 40px rgba(255,0,255,0.7);
+    -webkit-text-stroke: 2px #000;
+    animation: bossShake 0.1s infinite;
+}
+
+@keyframes bossShake {
+    0%, 100% { transform: translate(0); }
+    25% { transform: translate(-2px, 1px); }
+    50% { transform: translate(2px, -1px); }
+    75% { transform: translate(-1px, -2px); }
+}
+
+@keyframes bossAnnounce {
+    0% { opacity: 0; }
+    10% { opacity: 1; }
+    70% { opacity: 1; }
+    100% { opacity: 0; }
+}
+
+#weapon-switch-indicator {
+    position: absolute;
+    bottom: 80px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 8px;
+    animation: fadeInOut 1.5s ease forwards;
+}
+
+@keyframes fadeInOut {
+    0% { opacity: 0; }
+    15% { opacity: 1; }
+    70% { opacity: 1; }
+    100% { opacity: 0; }
+}
+
+.weapon-slot {
+    padding: 6px 16px;
+    background: rgba(17,17,17,0.8);
+    border: 2px solid #555;
+    border-radius: 4px;
+    font-family: 'Press Start 2P', monospace;
+    font-size: 10px;
+    color: #CCCCCC;
+    transition: all 0.15s ease;
+}
+
+.weapon-slot.active {
+    border-color: #FF00FF;
+    color: #FF00FF;
+    background: rgba(255,0,255,0.15);
+    box-shadow: 0 0 10px rgba(255,0,255,0.3);
+}
+
+#control-hints {
+    position: absolute;
+    bottom: 4px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-family: 'Press Start 2P', monospace;
+    font-size: 8px;
+    color: #555;
+    white-space: nowrap;
+}
+
+/* ============================================
+   PAUSE SCREEN
+   ============================================ */
+#pause-screen {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    background: rgba(17,17,17,0.85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 500;
+}
+
+.pause-content {
+    text-align: center;
+}
+
+.pause-content h2 {
+    font-family: 'Bangers', cursive;
+    font-size: 64px;
+    color: #00FFFF;
+    text-shadow: 3px 3px 0 #000, 0 0 20px rgba(0,255,255,0.5);
+    margin-bottom: 32px;
+}
+
+.pause-content .btn-primary,
+.pause-content .btn-secondary {
+    pointer-events: all;
+    display: block;
+    margin: 12px auto;
+}
+
+/* ============================================
+   GAME OVER SCREEN
+   ============================================ */
+#gameover-screen {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    background: rgba(17,17,17,0.9);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 800;
+}
+
+.gameover-content {
+    text-align: center;
+}
+
+.gameover-title {
+    font-family: 'Bangers', cursive;
+    font-size: 80px;
+    color: #FF3B30;
+    text-shadow: 4px 4px 0 #000, 0 0 30px rgba(255,59,48,0.5);
+    -webkit-text-stroke: 2px #000;
+    animation: gameoverPulse 2s infinite;
+}
+
+@keyframes gameoverPulse {
+    0%, 100% { text-shadow: 4px 4px 0 #000, 0 0 30px rgba(255,59,48,0.5); }
+    50% { text-shadow: 4px 4px 0 #000, 0 0 50px rgba(255,59,48,0.8); }
+}
+
+.final-stats {
+    margin: 32px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.stat-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 48px;
+    font-size: 18px;
+}
+
+.stat-row .label {
+    font-family: 'Russo One', sans-serif;
+    color: #CCCCCC;
+}
+
+.stat-row .value {
+    font-family: 'Bangers', cursive;
+    font-size: 28px;
+    color: #FFFF00;
+    text-shadow: 1px 1px 0 #000;
+}
+
+#new-high-score {
+    font-family: 'Bangers', cursive;
+    font-size: 36px;
+    color: #FFFF00;
+    text-shadow: 2px 2px 0 #000, 0 0 20px rgba(255,255,0,0.7);
+    animation: newHighScore 0.5s ease infinite alternate;
+    margin: 16px 0;
+}
+
+@keyframes newHighScore {
+    0% { transform: scale(1) rotate(-2deg); }
+    100% { transform: scale(1.1) rotate(2deg); }
+}
+
+.gameover-content .btn-primary,
+.gameover-content .btn-secondary {
+    pointer-events: all;
+}
