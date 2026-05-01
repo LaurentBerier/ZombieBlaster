@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Level ⇄ Three.js editor converter</title>
+<style>
+  body { font-family: system-ui, -apple-system, sans-serif; max-width: 820px; margin: 32px auto; padding: 0 16px 64px; color: #ddd; background: #1a1a22; line-height: 1.5; }
+  h1 { color: #00ff88; margin-bottom: 4px; }
+  h2 { color: #6cf; margin-top: 32px; border-bottom: 1px solid #333; padding-bottom: 4px; }
+  section { margin: 24px 0; padding: 16px 20px; background: #232330; border-radius: 8px; }
+  button { font: inherit; padding: 8px 18px; background: #00ff88; color: #1a1a22; border: 0; border-radius: 4px; cursor: pointer; font-weight: 600; }
+  button:hover { background: #33ffaa; }
+  input[type=file] { font: inherit; padding: 6px; color: #ddd; }
+  pre { background: #0d0d12; padding: 12px; border-radius: 4px; max-height: 240px; overflow: auto; font-size: 12px; line-height: 1.4; }
+  code { background: #0d0d12; padding: 2px 6px; border-radius: 3px; font-size: 0.92em; }
+  .ok { color: #00ff88; }
+  .err { color: #ff4466; }
+  small { color: #888; }
+  ul { padding-left: 20px; }
+  li { margin: 4px 0; }
+  a { color: #6cf; }
+</style>
+</head>
+<body>
+
+<h1>Level ⇄ Three.js editor converter</h1>
+<small>Round-trip <code>data/levelData.json</code> through <a href="https://threejs.org/editor/" target="_blank">https://threejs.org/editor/</a></small>
+
+<section>
+  <h2>1. Export <code>levelData.json</code> → editor scene</h2>
+  <p>Builds a Three.js scene with marker objects for every entity in the level, then downloads it as <code>level-scene.json</code>. Open the Three.js editor and drag the file into the canvas (or use <strong>File → Import</strong>).</p>
+  <button id="export-btn">Export to scene.json</button>
+  <pre id="export-log">Click "Export" to start.</pre>
+</section>
+
+<section>
+  <h2>2. Import edited scene → <code>levelData.json</code></h2>
+  <p>Edit in the Three.js editor, then use <strong>File → Export Scene</strong> to download a <code>.json</code>. Drop that file here:</p>
+  <input type="file" id="import-input" accept=".json">
+  <pre id="import-log">Choose a scene .json above to convert it back.</pre>
+</section>
+
+<section>
+  <h2>What the markers represent</h2>
+  <ul>
+    <li><strong>Wireframe green boxes</strong> = rooms. Translate to move, scale to resize. <code>userData.id</code> carries the room name.</li>
+    <li><strong>Solid coloured cubes</strong> = custom props. Colour is hashed from the GLB filename. <code>userData.asset</code> carries the GLB filename (must exist under <code>assets/CorridorKit/</code>).</li>
+    <li><strong>Red icosahedrons</strong> = enemy spawns (only x/z survive the round-trip — the y is purely visual).</li>
+    <li><strong>Cyan octahedron</strong> = player spawn.</li>
+    <li><strong>Native PointLights</strong> = lights. Edit colour/intensity/distance in the editor's Light panel directly.</li>
+  </ul>
+  <p>Anything in <code>levelData.json</code> with no visual representation (corridors, traps, vats, pumps, platforms — all currently empty) is stashed verbatim in <code>scene.userData.unmappedData</code> and re-emitted untouched on import.</p>
+  <p><strong>To add a new prop in the editor:</strong> duplicate an existing prop cube, position it, then in the User Data panel update <code>id</code> (must be unique) and <code>asset</code> (filename of a GLB in <code>assets/CorridorKit/</code>).</p>
+</section>
+
+<script src="../js/lib/three.min.js"></script>
+<script>
+  const ROOM_COLOR = 0x00ff88;
+  const ENEMY_SPAWN_COLOR = 0xff0044;
+  const PLAYER_SPAWN_COLOR = 0x00ffff;
+
+  // Stable filename → distinct hue, so two duplicates of the same GLB
+  // get the same colour and you can spot them at a glance in the editor.
+  function hashColor(str) {
+    let h = 0;
+    for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) | 0;
+    const hue = ((h % 360) + 360) % 360;
+    const tmp = new THREE.Color();
+    tmp.setHSL(hue / 360, 0.6, 0.55);
+    return tmp.getHex();
+  }
+
+  function download(filename, text) {
+    const blob = new Blob([text], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  // Round to 4 decimal places — enough for visual fidelity, kills float noise.
+  function round(n) {
+    return Math.round(n * 10000) / 10000;
+  }
+
+  // ---------- Forward: levelData.json → THREE.Scene ----------
+
+  function buildScene(level) {
+    const scene = new THREE.Scene();
+    scene.name = 'Zombie Blaster Level';
+    scene.userData.kind = 'level';
+    scene.userData.version = level.version ?? 1;
+    // Fields with no visual representation — preserve exactly as-is.
+    scene.userData.unmappedData = {
+      corridors: level.corridors ?? [],
+      props: level.props ?? { vats: [], pumps: [] },
+      platforms: level.platforms ?? [],
+      traps: level.traps ?? { crushers: [], acidPools: [], pipeBursts: [] },
+    };
+
+    const roomGroup = new THREE.Group();
+    roomGroup.name = 'Rooms';
+    for (const r of level.rooms ?? []) {
+      const geo = new THREE.BoxGeometry(r.w, r.h, r.d);
+      const mat = new THREE.MeshBasicMaterial({ color: ROOM_COLOR, wireframe: true });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(r.cx, r.h / 2, r.cz);
+      mesh.name = `Room: ${r.id}`;
+      mesh.userData.kind = 'room';
+      mesh.userData.id = r.id;
+      roomGroup.add(mesh);
+    }
+    scene.add(roomGroup);
+
+    const propGroup = new THREE.Group();
+    propGroup.name = 'Custom Props';
+    for (const p of level.customProps ?? []) {
+      const geo = new THREE.BoxGeometry(1, 1, 1);
+      const mat = new THREE.MeshBasicMaterial({ color: hashColor(p.asset) });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(p.x ?? 0, p.y ?? 0, p.z ?? 0);
+      mesh.rotation.set(p.rx ?? 0, p.ry ?? 0, p.rz ?? 0);
+      const s = p.scale ?? 1;
+      mesh.scale.set(s, s, s);
+      mesh.name = `Prop: ${p.id} [${p.asset}]`;
+      mesh.userData.kind = 'customProp';
+      mesh.userData.id = p.id;
+      mesh.userData.asset = p.asset;
+      propGroup.add(mesh);
+    }
+    scene.add(propGroup);
+
+    const spawnGroup = new THREE.Group();
+    spawnGroup.name = 'Enemy Spawns';
+    for (const s of level.enemySpawns ?? []) {
+      const geo = new THREE.IcosahedronGeometry(0.6);
+      const mat = new THREE.MeshBasicMaterial({ color: ENEMY_SPAWN_COLOR });
+      const mesh = new THREE.Mesh(geo, mat);
+      // Lift the marker for visibility — original schema has no y, so we
+      // discard the editor's y on the way back.
+      mesh.position.set(s.x, 0.6, s.z);
+      mesh.name = `Enemy Spawn: ${s.id}`;
+      mesh.userData.kind = 'enemySpawn';
+      mesh.userData.id = s.id;
+      spawnGroup.add(mesh);
+    }
+    scene.add(spawnGroup);
+
+    if (level.playerSpawn) {
+      const geo = new THREE.OctahedronGeometry(0.6);
+      const mat = new THREE.MeshBasicMaterial({ color: PLAYER_SPAWN_COLOR });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(level.playerSpawn.x, level.playerSpawn.y, level.playerSpawn.z);
+      mesh.name = 'Player Spawn';
+      mesh.userData.kind = 'playerSpawn';
+      scene.add(mesh);
+    }
+
+    const lightGroup = new THREE.Group();
+    lightGroup.name = 'Lights';
+    for (const l of level.lights ?? []) {
+      const colorInt = typeof l.color === 'string'
+        ? parseInt(l.color.replace(/^0x/i, ''), 16)
+        : l.color;
+      const light = new THREE.PointLight(colorInt, l.intensity ?? 1, l.distance ?? 0);
+      light.position.set(l.x ?? 0, l.y ?? 0, l.z ?? 0);
+      light.name = `Light: ${l.id}`;
+      light.userData.kind = 'light';
+      light.userData.id = l.id;
+      lightGroup.add(light);
+    }
+    scene.add(lightGroup);
+
+    return scene;
+  }
+
+  // ---------- Reverse: THREE.Scene → levelData.json ----------
+
+  function extractLevel(scene) {
+    const ud = scene.userData ?? {};
+    const unmapped = ud.unmappedData ?? {};
+    const level = {
+      version: ud.version ?? 1,
+      rooms: [],
+      corridors: unmapped.corridors ?? [],
+      props: unmapped.props ?? { vats: [], pumps: [] },
+      customProps: [],
+      enemySpawns: [],
+      platforms: unmapped.platforms ?? [],
+      lights: [],
+      traps: unmapped.traps ?? { crushers: [], acidPools: [], pipeBursts: [] },
+      playerSpawn: { x: 0, y: 1.7, z: 0 },
+    };
+
+    scene.traverse(node => {
+      const k = node.userData?.kind;
+      if (!k || k === 'level') return;
+
+      if (k === 'room') {
+        // BoxGeometry stores its authored size in .parameters; the user's
+        // resize in the editor lands in .scale, so multiply.
+        const params = node.geometry?.parameters ?? { width: 1, height: 1, depth: 1 };
+        level.rooms.push({
+          id: node.userData.id,
+          cx: round(node.position.x),
+          cz: round(node.position.z),
+          w: round(params.width * node.scale.x),
+          h: round(params.height * node.scale.y),
+          d: round(params.depth * node.scale.z),
+        });
+      } else if (k === 'customProp') {
+        const prop = {
+          id: node.userData.id,
+          asset: node.userData.asset,
+          x: round(node.position.x),
+          y: round(node.position.y),
+          z: round(node.position.z),
+        };
+        // Original schema only emits non-zero rotation axes — match that.
+        if (node.rotation.x) prop.rx = round(node.rotation.x);
+        if (node.rotation.y) prop.ry = round(node.rotation.y);
+        if (node.rotation.z) prop.rz = round(node.rotation.z);
+        // Schema uses uniform scale; trust scale.x.
+        prop.scale = round(node.scale.x);
+        level.customProps.push(prop);
+      } else if (k === 'enemySpawn') {
+        // Original schema has no y for spawns — drop it.
+        level.enemySpawns.push({
+          id: node.userData.id,
+          x: round(node.position.x),
+          z: round(node.position.z),
+        });
+      } else if (k === 'playerSpawn') {
+        level.playerSpawn = {
+          x: round(node.position.x),
+          y: round(node.position.y),
+          z: round(node.position.z),
+        };
+      } else if (k === 'light') {
+        level.lights.push({
+          id: node.userData.id,
+          x: round(node.position.x),
+          y: round(node.position.y),
+          z: round(node.position.z),
+          color: '0x' + node.color.getHexString().toUpperCase(),
+          intensity: node.intensity,
+          distance: node.distance,
+        });
+      }
+    });
+
+    return level;
+  }
+
+  // ---------- UI wiring ----------
+
+  const exportLog = document.getElementById('export-log');
+  const importLog = document.getElementById('import-log');
+
+  document.getElementById('export-btn').addEventListener('click', async () => {
+    exportLog.textContent = 'Fetching ../data/levelData.json…';
+    exportLog.className = '';
+    try {
+      const level = await fetch('../data/levelData.json').then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status} fetching levelData.json`);
+        return r.json();
+      });
+      const scene = buildScene(level);
+      const json = scene.toJSON();
+      download('level-scene.json', JSON.stringify(json, null, 2));
+      exportLog.className = 'ok';
+      exportLog.textContent =
+        `Built scene:\n` +
+        `  ${level.rooms?.length ?? 0} room(s)\n` +
+        `  ${level.customProps?.length ?? 0} custom prop(s)\n` +
+        `  ${level.enemySpawns?.length ?? 0} enemy spawn(s)\n` +
+        `  ${level.lights?.length ?? 0} light(s)\n` +
+        `  1 player spawn\n\n` +
+        `Downloaded level-scene.json (${(JSON.stringify(json).length / 1024).toFixed(1)} KB).\n` +
+        `Open https://threejs.org/editor/ and drag this file into the canvas.`;
+    } catch (e) {
+      exportLog.className = 'err';
+      exportLog.textContent = `Export failed: ${e.message}\n\n${e.stack ?? ''}`;
+    }
+  });
+
+  document.getElementById('import-input').addEventListener('change', async (ev) => {
+    const file = ev.target.files?.[0];
+    if (!file) return;
+    importLog.textContent = `Reading ${file.name}…`;
+    importLog.className = '';
+    try {
+      const text = await file.text();
+      const sceneJson = JSON.parse(text);
+      // Three.js editor's File → Export Scene gives ObjectLoader format directly.
+      // File → Save (workspace) wraps it under .scene — handle both.
+      const root = sceneJson.scene ?? sceneJson;
+      const loader = new THREE.ObjectLoader();
+      const scene = loader.parse(root);
+      const level = extractLevel(scene);
+      download('levelData.json', JSON.stringify(level, null, 2));
+      importLog.className = 'ok';
+      importLog.textContent =
+        `Extracted:\n` +
+        `  ${level.rooms.length} room(s)\n` +
+        `  ${level.customProps.length} custom prop(s)\n` +
+        `  ${level.enemySpawns.length} enemy spawn(s)\n` +
+        `  ${level.lights.length} light(s)\n` +
+        `  1 player spawn\n\n` +
+        `Downloaded levelData.json. Move it to data/levelData.json to apply.`;
+    } catch (e) {
+      importLog.className = 'err';
+      importLog.textContent = `Import failed: ${e.message}\n\n${e.stack ?? ''}`;
+    }
+  });
+</script>
+</body>
+</html>
