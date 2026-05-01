@@ -29,7 +29,47 @@ function cloneAsset(source) {
     return isSkinned ? cloneSkinned(source) : source.clone(true);
 }
 
+// Belt-and-braces autosave neutralisation.
+//
+// The Three.js editor's autosave runs editor.toJSON() and writes the result to
+// IndexedDB on every signal-driven scene change. With our ~310 MB GLB scene,
+// both steps block the main thread for ~1s every time the user nudges a
+// gizmo, which is the freeze the user sees. The editor's own bail check is at
+// the *top* of saveState() in editor/index.html, so toggling the autosave
+// config flag isn't enough on its own — any save already queued in its
+// 1s/100ms debounce will still fire (the inner callbacks don't re-check the
+// flag). So we hit it from three angles:
+//   1) flip the autosave config flag, which prevents *new* saveState() calls
+//      from scheduling anything;
+//   2) stub editor.toJSON() so any race / queued save reads a tiny payload;
+//   3) stub editor.storage.set() so the IndexedDB structured-clone is skipped.
+// All three are idempotent and stash the originals on editor._zbOriginal* so
+// you can restore them via the dev console if you ever need the editor's
+// native Save Project flow back.
+function neutraliseAutosave(editor) {
+    if (editor.config?.setKey) {
+        editor.config.setKey('autosave', false);
+    }
+    if (typeof editor.toJSON === 'function' && !editor._zbOriginalToJSON) {
+        editor._zbOriginalToJSON = editor.toJSON.bind(editor);
+        editor.toJSON = function () {
+            return {
+                metadata: { type: 'App', version: 4, generator: 'three.js editor (zombie-blaster stub)' },
+                project: {}, camera: {}, scene: { type: 'Scene' },
+                scripts: {}, history: { undos: [], redos: [] },
+            };
+        };
+    }
+    if (editor.storage?.set && !editor.storage._zbOriginalSet) {
+        editor.storage._zbOriginalSet = editor.storage.set.bind(editor.storage);
+        editor.storage.set = function () { /* no-op */ };
+    }
+}
+
 export async function importLevel(editor) {
+    // Neutralise autosave BEFORE editor.clear() and addObject() fire any signals.
+    neutraliseAutosave(editor);
+
     // 1. Pull the level JSON.
     let level;
     try {
@@ -161,7 +201,8 @@ export async function importLevel(editor) {
         `${level.rooms?.length ?? 0} room(s), ` +
         `${level.customProps?.length ?? 0} prop(s), ` +
         `${level.enemySpawns?.length ?? 0} spawn(s), ` +
-        `${level.lights?.length ?? 0} light(s)`
+        `${level.lights?.length ?? 0} light(s) ` +
+        `· autosave neutralised (use File → Save Zombie Blaster Level to persist)`
     );
 }
 
