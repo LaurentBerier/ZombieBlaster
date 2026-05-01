@@ -1,6 +1,11 @@
-"""Local static server with correct MIME types for ES modules (Windows-safe)."""
+"""Local static server with correct MIME types for ES modules (Windows-safe).
+
+Also exposes POST /api/save-level so tools/level-editor.html can persist edits
+straight into data/levelData.json.
+"""
 import errno
 import http.server
+import json
 import os
 import socketserver
 
@@ -36,6 +41,61 @@ _extensions.update(
 class Handler(http.server.SimpleHTTPRequestHandler):
     extensions_map = _extensions
 
+    def do_POST(self) -> None:
+        path = self.path.split("?", 1)[0]
+        if path != "/api/save-level":
+            self.send_error(405, "Method Not Allowed")
+            return
+
+        length_hdr = self.headers.get("Content-Length")
+        if not length_hdr:
+            self.send_error(400, "Missing Content-Length")
+            return
+        try:
+            n = int(length_hdr)
+        except ValueError:
+            self.send_error(400, "Bad Content-Length")
+            return
+
+        body = self.rfile.read(n)
+        try:
+            text = body.decode("utf-8")
+        except UnicodeDecodeError:
+            self.send_error(400, "Body must be UTF-8")
+            return
+
+        try:
+            json.loads(text)
+        except json.JSONDecodeError as e:
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(
+                json.dumps({"ok": False, "error": "Invalid JSON", "detail": str(e)}).encode("utf-8")
+            )
+            return
+
+        out_path = os.path.join(_ROOT, "data", "levelData.json")
+        tmp_path = out_path + ".tmp"
+        try:
+            os.makedirs(os.path.dirname(out_path), exist_ok=True)
+            with open(tmp_path, "w", encoding="utf-8", newline="\n") as f:
+                f.write(text)
+            os.replace(tmp_path, out_path)
+        except OSError as e:
+            try:
+                if os.path.isfile(tmp_path):
+                    os.remove(tmp_path)
+            except OSError:
+                pass
+            self.send_error(500, f"Write failed: {e}")
+            return
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b'{"ok":true}')
+
 
 def _bind_server(start_port: int, attempts: int = 30):
     """Return (TCPServer, actual_port). Tries start_port, start_port+1, … if busy."""
@@ -66,3 +126,4 @@ if __name__ == "__main__":
         print(f"  http://localhost:{bound}/")
         print()
         httpd.serve_forever()
+

@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Zombie Blaster — Level Editor</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100vh; overflow: hidden;
+    background: #1a1a22; color: #ddd; font-family: system-ui, -apple-system, sans-serif; }
+  #viewport { position: fixed; inset: 0; }
+  #toolbar { position: fixed; top: 12px; left: 12px; right: 12px; display: flex; gap: 8px;
+    z-index: 10; pointer-events: none; flex-wrap: wrap; }
+  #toolbar > * { pointer-events: auto; }
+  .panel { background: rgba(35, 35, 48, 0.92); padding: 8px 12px; border-radius: 6px;
+    backdrop-filter: blur(8px); display: flex; align-items: center; gap: 8px; }
+  button { font: inherit; padding: 6px 14px; background: #2c2c3a; color: #ddd;
+    border: 1px solid #444; border-radius: 4px; cursor: pointer; }
+  button:hover { background: #3a3a4a; }
+  button.primary { background: #00ff88; color: #1a1a22; border-color: #00ff88; font-weight: 600; }
+  button.primary:hover { background: #33ffaa; }
+  button.active { background: #00ff88; color: #1a1a22; border-color: #00ff88; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  #status { position: fixed; bottom: 12px; left: 12px; right: 12px; padding: 8px 14px;
+    background: rgba(35,35,48,0.92); border-radius: 6px; font-size: 13px;
+    z-index: 10; backdrop-filter: blur(8px); }
+  .key { background: #1a1a22; padding: 2px 6px; border-radius: 3px;
+    font-family: ui-monospace, monospace; font-size: 12px; color: #6cf; }
+  #selection-info { margin-left: auto; font-family: ui-monospace, monospace; font-size: 12px; }
+  #loading { position: fixed; inset: 0; background: #1a1a22; display: flex;
+    align-items: center; justify-content: center; flex-direction: column; gap: 16px;
+    z-index: 100; }
+  #loading.done { display: none; }
+  #loading h2 { color: #00ff88; margin: 0; }
+  .progress-bar { width: 360px; height: 8px; background: #2c2c3a; border-radius: 4px; overflow: hidden; }
+  .progress-fill { height: 100%; background: #00ff88; transition: width 0.15s; }
+  #loading-text { font-family: ui-monospace, monospace; font-size: 13px; color: #888; }
+  #save-status { color: #6cf; font-family: ui-monospace, monospace; font-size: 12px; }
+</style>
+</head>
+<body>
+  <div id="loading">
+    <h2>Loading level…</h2>
+    <div class="progress-bar"><div class="progress-fill" id="progress" style="width:0%"></div></div>
+    <div id="loading-text">Initializing</div>
+  </div>
+
+  <div id="viewport"></div>
+
+  <div id="toolbar">
+    <div class="panel">
+      <button id="save-btn" class="primary">Save</button>
+      <button id="reload-btn">Reload</button>
+      <span id="save-status"></span>
+    </div>
+    <div class="panel">
+      <span style="color:#888">Mode:</span>
+      <button id="mode-translate" class="active">Translate (G)</button>
+      <button id="mode-rotate">Rotate (R)</button>
+      <button id="mode-scale">Scale (S)</button>
+    </div>
+    <div class="panel" id="selection-info">Nothing selected</div>
+  </div>
+
+  <div id="status">
+    <span class="key">Click</span> select &nbsp;·&nbsp;
+    <span class="key">G</span>/<span class="key">R</span>/<span class="key">S</span> mode &nbsp;·&nbsp;
+    <span class="key">Ctrl+D</span> duplicate &nbsp;·&nbsp;
+    <span class="key">Delete</span> remove &nbsp;·&nbsp;
+    <span class="key">Esc</span> deselect &nbsp;·&nbsp;
+    <span class="key">Ctrl+S</span> save
+  </div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.182.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.182.0/examples/jsm/"
+    }
+  }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { TransformControls } from 'three/addons/controls/TransformControls.js';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+    import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
+
+    const ROOM_COLOR = 0x00ff88;
+    const ENEMY_SPAWN_COLOR = 0xff0044;
+    const PLAYER_SPAWN_COLOR = 0x00ffff;
+    const LIGHT_HELPER_OPACITY = 0.6;
+
+    // --- DOM refs
+    const viewport = document.getElementById('viewport');
+    const loadingEl = document.getElementById('loading');
+    const progressEl = document.getElementById('progress');
+    const loadingTextEl = document.getElementById('loading-text');
+    const selectionInfoEl = document.getElementById('selection-info');
+    const saveBtn = document.getElementById('save-btn');
+    const saveStatusEl = document.getElementById('save-status');
+    const modeButtons = {
+      translate: document.getElementById('mode-translate'),
+      rotate:    document.getElementById('mode-rotate'),
+      scale:     document.getElementById('mode-scale'),
+    };
+
+    // --- Three.js setup
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x1a1a22);
+
+    const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 500);
+    camera.position.set(40, 35, 40);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(window.devicePixelRatio);
+    viewport.appendChild(renderer.domElement);
+
+    function resize() {
+      const w = window.innerWidth, h = window.innerHeight;
+      renderer.setSize(w, h);
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    // Editor lighting (independent of level lights — just so users can SEE the GLBs)
+    scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+    const editorSun = new THREE.DirectionalLight(0xffffff, 0.6);
+    editorSun.position.set(15, 30, 10);
+    scene.add(editorSun);
+
+    // Reference grid + axes
+    const grid = new THREE.GridHelper(80, 40, 0x444466, 0x222233);
+    scene.add(grid);
+    scene.add(new THREE.AxesHelper(3));
+
+    // Camera + transform controls
+    const orbit = new OrbitControls(camera, renderer.domElement);
+    orbit.target.set(0, 0, 0);
+    orbit.update();
+
+    const transform = new TransformControls(camera, renderer.domElement);
+    transform.size = 0.8;
+    scene.add(transform);
+    transform.addEventListener('dragging-changed', e => orbit.enabled = !e.value);
+
+    // --- State
+    let level = null;            // raw levelData object (kept for unmapped fields)
+    const glbCache = new Map();  // asset filename → loaded GLB scene
+    const editableNodes = [];    // every Object3D the user can select/edit
+    let selected = null;
+
+    // --- Helpers
+    const round = n => Math.round(n * 10000) / 10000;
+
+    function setProgress(fraction, text) {
+      progressEl.style.width = `${(fraction * 100).toFixed(0)}%`;
+      if (text) loadingTextEl.textContent = text;
+    }
+
+    function cloneAsset(source) {
+      let isSkinned = false;
+      source.traverse(c => { if (c.isSkinnedMesh) isSkinned = true; });
+      return isSkinned ? cloneSkinned(source) : source.clone(true);
+    }
+
+    // --- Build / rebuild scene from levelData
+    function buildScene() {
+      // Strip prior editable nodes (keep editor lights, grid, transform gizmo)
+      for (const n of editableNodes) scene.remove(n);
+      editableNodes.length = 0;
+
+      // Rooms — wireframe boxes
+      for (const r of level.rooms ?? []) {
+        const mesh = new THREE.Mesh(
+          new THREE.BoxGeometry(r.w, r.h, r.d),
+          new THREE.MeshBasicMaterial({ color: ROOM_COLOR, wireframe: true })
+        );
+        mesh.position.set(r.cx, r.h / 2, r.cz);
+        mesh.userData = { kind: 'room', id: r.id };
+        scene.add(mesh);
+        editableNodes.push(mesh);
+      }
+
+      // Custom props — real GLBs
+      for (const p of level.customProps ?? []) {
+        const source = glbCache.get(p.asset);
+        if (!source) {
+          console.warn(`No GLB cached for ${p.asset}; skipping prop ${p.id}`);
+          continue;
+        }
+        const mesh = cloneAsset(source);
+        mesh.position.set(p.x ?? 0, p.y ?? 0, p.z ?? 0);
+        mesh.rotation.set(p.rx ?? 0, p.ry ?? 0, p.rz ?? 0);
+        const s = p.scale ?? 1;
+        mesh.scale.setScalar(s);
+        mesh.userData = { kind: 'customProp', id: p.id, asset: p.asset };
+        scene.add(mesh);
+        editableNodes.push(mesh);
+      }
+
+      // Enemy spawns — red icosahedrons
+      for (const s of level.enemySpawns ?? []) {
+        const mesh = new THREE.Mesh(
+          new THREE.IcosahedronGeometry(0.6),
+          new THREE.MeshLambertMaterial({ color: ENEMY_SPAWN_COLOR })
+        );
+        // y is editor-only (original schema has only x/z)
+        mesh.position.set(s.x, 0.6, s.z);
+        mesh.userData = { kind: 'enemySpawn', id: s.id };
+        scene.add(mesh);
+        editableNodes.push(mesh);
+      }
+
+      // Player spawn — cyan octahedron
+      if (level.playerSpawn) {
+        const mesh = new THREE.Mesh(
+          new THREE.OctahedronGeometry(0.6),
+          new THREE.MeshLambertMaterial({ color: PLAYER_SPAWN_COLOR })
+        );
+        mesh.position.set(level.playerSpawn.x, level.playerSpawn.y, level.playerSpawn.z);
+        mesh.userData = { kind: 'playerSpawn' };
+        scene.add(mesh);
+        editableNodes.push(mesh);
+      }
+
+      // Lights — PointLights with a visible wireframe sphere so they're clickable
+      for (const l of level.lights ?? []) {
+        const colorInt = typeof l.color === 'string'
+          ? parseInt(l.color.replace(/^0x/i, ''), 16)
+          : l.color;
+        const light = new THREE.PointLight(colorInt, l.intensity ?? 1, l.distance ?? 0);
+        light.position.set(l.x ?? 0, l.y ?? 0, l.z ?? 0);
+        light.userData = { kind: 'light', id: l.id };
+
+        // Visible marker (child of light so it follows)
+        const marker = new THREE.Mesh(
+          new THREE.SphereGeometry(0.35, 12, 12),
+          new THREE.MeshBasicMaterial({
+            color: colorInt, wireframe: true, transparent: true, opacity: LIGHT_HELPER_OPACITY,
+          })
+        );
+        light.add(marker);
+
+        scene.add(light);
+        editableNodes.push(light);
+      }
+    }
+
+    // --- Extract levelData back out of the scene
+    function extractLevel() {
+      const out = {
+        version: level.version ?? 1,
+        rooms: [],
+        // Pass through the unmapped sections (currently all empty in the file)
+        corridors: level.corridors ?? [],
+        props: level.props ?? { vats: [], pumps: [] },
+        customProps: [],
+        enemySpawns: [],
+        platforms: level.platforms ?? [],
+        lights: [],
+        traps: level.traps ?? { crushers: [], acidPools: [], pipeBursts: [] },
+        playerSpawn: { x: 0, y: 1.7, z: 0 },
+      };
+
+      for (const node of editableNodes) {
+        const k = node.userData.kind;
+        if (k === 'room') {
+          const params = node.geometry?.parameters ?? { width: 1, height: 1, depth: 1 };
+          out.rooms.push({
+            id: node.userData.id,
+            cx: round(node.position.x),
+            cz: round(node.position.z),
+            w: round(params.width * node.scale.x),
+            h: round(params.height * node.scale.y),
+            d: round(params.depth * node.scale.z),
+          });
+        } else if (k === 'customProp') {
+          const prop = {
+            id: node.userData.id,
+            asset: node.userData.asset,
+            x: round(node.position.x),
+            y: round(node.position.y),
+            z: round(node.position.z),
+          };
+          // Match the original schema: only emit non-zero rotation axes.
+          if (node.rotation.x) prop.rx = round(node.rotation.x);
+          if (node.rotation.y) prop.ry = round(node.rotation.y);
+          if (node.rotation.z) prop.rz = round(node.rotation.z);
+          prop.scale = round(node.scale.x);
+          out.customProps.push(prop);
+        } else if (k === 'enemySpawn') {
+          out.enemySpawns.push({
+            id: node.userData.id,
+            x: round(node.position.x),
+            z: round(node.position.z),
+          });
+        } else if (k === 'playerSpawn') {
+          out.playerSpawn = {
+            x: round(node.position.x),
+            y: round(node.position.y),
+            z: round(node.position.z),
+          };
+        } else if (k === 'light') {
+          // Read live values from the PointLight so any in-editor edits stick.
+          out.lights.push({
+            id: node.userData.id,
+            x: round(node.position.x),
+            y: round(node.position.y),
+            z: round(node.position.z),
+            color: '0x' + node.color.getHexString().toUpperCase(),
+            intensity: node.intensity,
+            distance: node.distance,
+          });
+        }
+      }
+
+      return out;
+    }
+
+    // --- Load level + GLBs
+    async function bootstrap() {
+      setProgress(0, 'Fetching levelData.json');
+      level = await fetch('../data/levelData.json').then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status} fetching levelData.json`);
+        return r.json();
+      });
+
+      const uniqueAssets = [...new Set((level.customProps ?? []).map(p => p.asset))];
+      const loader = new GLTFLoader();
+
+      for (let i = 0; i < uniqueAssets.length; i++) {
+        const asset = uniqueAssets[i];
+        setProgress(i / uniqueAssets.length, `Loading ${asset}  (${i + 1}/${uniqueAssets.length})`);
+        try {
+          const gltf = await loader.loadAsync(`../assets/CorridorKit/${asset}`);
+          glbCache.set(asset, gltf.scene);
+        } catch (e) {
+          console.warn(`Failed to load ${asset}:`, e);
+        }
+      }
+
+      setProgress(1, 'Building scene');
+      buildScene();
+      loadingEl.classList.add('done');
+    }
+
+    // --- Selection
+    const raycaster = new THREE.Raycaster();
+    const ndc = new THREE.Vector2();
+
+    renderer.domElement.addEventListener('pointerdown', onPointerDown);
+
+    let mouseDown = null;
+    function onPointerDown(e) {
+      if (!orbit.enabled) return; // gizmo is dragging
+      mouseDown = { x: e.clientX, y: e.clientY };
+    }
+    renderer.domElement.addEventListener('pointerup', e => {
+      if (!mouseDown) return;
+      const dx = e.clientX - mouseDown.x, dy = e.clientY - mouseDown.y;
+      mouseDown = null;
+      // Only treat as a click if the pointer barely moved (otherwise it was an orbit drag)
+      if (Math.hypot(dx, dy) > 4) return;
+      pickAt(e.clientX, e.clientY);
+    });
+
+    function pickAt(clientX, clientY) {
+      ndc.x = (clientX / window.innerWidth) * 2 - 1;
+      ndc.y = -((clientY / window.innerHeight) * 2 - 1);
+      raycaster.setFromCamera(ndc, camera);
+      const hits = raycaster.intersectObjects(editableNodes, true);
+      if (hits.length === 0) { deselect(); return; }
+      // Walk up to the first ancestor with userData.kind (the editable root)
+      let target = hits[0].object;
+      while (target && !target.userData?.kind) target = target.parent;
+      if (target) select(target);
+    }
+
+    function select(node) {
+      selected = node;
+      transform.attach(node);
+      updateSelectionInfo();
+    }
+
+    function deselect() {
+      selected = null;
+      transform.detach();
+      updateSelectionInfo();
+    }
+
+    function updateSelectionInfo() {
+      if (!selected) { selectionInfoEl.textContent = 'Nothing selected'; return; }
+      const ud = selected.userData;
+      const bits = [`kind=${ud.kind}`];
+      if (ud.id) bits.push(`id=${ud.id}`);
+      if (ud.asset) bits.push(`asset=${ud.asset}`);
+      selectionInfoEl.textContent = bits.join(' · ');
+    }
+
+    // --- Mode buttons + keyboard
+    function setMode(m) {
+      transform.setMode(m);
+      for (const [k, btn] of Object.entries(modeButtons)) btn.classList.toggle('active', k === m);
+    }
+    modeButtons.translate.addEventListener('click', () => setMode('translate'));
+    modeButtons.rotate.addEventListener('click', () => setMode('rotate'));
+    modeButtons.scale.addEventListener('click', () => setMode('scale'));
+
+    window.addEventListener('keydown', e => {
+      if (e.target.matches('input, textarea')) return;
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        save();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd' && selected) {
+        e.preventDefault();
+        duplicateSelected();
+        return;
+      }
+      if (e.key === 'g') setMode('translate');
+      else if (e.key === 'r') setMode('rotate');
+      else if (e.key === 's') setMode('scale');
+      else if (e.key === 'Escape') deselect();
+      else if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (selected) deleteSelected();
+      }
+    });
+
+    // --- Duplicate / delete
+    function duplicateSelected() {
+      if (!selected) return;
+      const ud = selected.userData;
+      // Only customProps support cheap duplication (clone the cached GLB).
+      if (ud.kind !== 'customProp') return;
+      const source = glbCache.get(ud.asset);
+      if (!source) return;
+      const copy = cloneAsset(source);
+      copy.position.copy(selected.position);
+      copy.position.x += 1; // small offset so it's visually distinct
+      copy.rotation.copy(selected.rotation);
+      copy.scale.copy(selected.scale);
+      copy.userData = {
+        kind: 'customProp',
+        id: `${ud.id}_copy_${Date.now().toString(36)}`,
+        asset: ud.asset,
+      };
+      scene.add(copy);
+      editableNodes.push(copy);
+      select(copy);
+    }
+
+    function deleteSelected() {
+      if (!selected) return;
+      scene.remove(selected);
+      const idx = editableNodes.indexOf(selected);
+      if (idx >= 0) editableNodes.splice(idx, 1);
+      deselect();
+    }
+
+    // --- Save
+    saveBtn.addEventListener('click', save);
+    document.getElementById('reload-btn').addEventListener('click', () => location.reload());
+
+    async function save() {
+      if (saveBtn.disabled) return;
+      const data = extractLevel();
+      saveBtn.disabled = true;
+      saveStatusEl.textContent = 'Saving…';
+      try {
+        const resp = await fetch('/api/save-level', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data, null, 2),
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        saveStatusEl.textContent = `Saved · ${data.customProps.length} props · ${new Date().toLocaleTimeString()}`;
+      } catch (e) {
+        saveStatusEl.textContent = `Save failed: ${e.message}`;
+        console.error(e);
+      } finally {
+        saveBtn.disabled = false;
+      }
+    }
+
+    // --- Render loop
+    function animate() {
+      requestAnimationFrame(animate);
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    // --- Go
+    bootstrap().catch(e => {
+      loadingTextEl.textContent = `Load failed: ${e.message}`;
+      console.error(e);
+    });
+  </script>
+</body>
+</html>
