@@ -15,10 +15,12 @@ import socketserver
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 os.chdir(_ROOT)
 
-# Sibling Three.js editor checkout. Four URL prefixes get mapped onto its tree
-# so the editor's importmap (../build/, ../examples/jsm/, ../files/) keeps working.
-_EDITOR_ROOT = os.path.normpath(os.path.join(_ROOT, "..", "three.js_Editor"))
-_EDITOR_PREFIXES = ("/editor/", "/build/", "/examples/", "/files/")
+# Three.js editor checkout. Lives two levels up from this serve.py
+# (Games/three.js_Editor, while we're at Games/ZombieBlaster/ZombieBlaster).
+# Four URL prefixes get mapped onto its tree so the editor's importmap
+# (../build/, ../examples/jsm/, ../files/) keeps working.
+_EDITOR_ROOT = os.path.normpath(os.path.join(_ROOT, "..", "..", "three.js_Editor"))
+_EDITOR_PREFIXES = ("/editor/", "/build/", "/examples/", "/files/", "/src/")
 
 
 def _requested_port() -> int:
@@ -28,8 +30,9 @@ def _requested_port() -> int:
 def _addr_in_use(err: OSError) -> bool:
     if err.errno == errno.EADDRINUSE:
         return True
-    # Windows: [WinError 10048] address already in use
-    if getattr(err, "winerror", None) == 10048:
+    # Windows: 10048 (address already in use), 10013 (access denied / port reserved
+    # — fires when a port is in TIME_WAIT or in a kernel-reserved exclusion range).
+    if getattr(err, "winerror", None) in (10013, 10048):
         return True
     return False
 
@@ -125,12 +128,24 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(b'{"ok":true}')
 
 
+class _Server(http.server.ThreadingHTTPServer):
+    # Default socketserver backlog is 5 — way too low for the editor's burst of
+    # ~100 parallel module fetches. Without this, SYNs past 5 get RST'd by the
+    # kernel and the browser sees ERR_CONNECTION_REFUSED on random files.
+    request_queue_size = 256
+    daemon_threads = True
+
+
 def _bind_server(start_port: int, attempts: int = 30):
-    """Return (TCPServer, actual_port). Tries start_port, start_port+1, … if busy."""
+    """Return (server, actual_port). Tries start_port, start_port+1, … if busy.
+
+    ThreadingHTTPServer (3.7+) handles each request in a thread, so the editor's
+    parallel asset loads (~100 modules) don't queue up under HTTP/1.1 keep-alive.
+    """
     last_err = None
     for p in range(start_port, start_port + attempts):
         try:
-            return socketserver.TCPServer(("", p), Handler), p
+            return _Server(("", p), Handler), p
         except OSError as e:
             if _addr_in_use(e):
                 last_err = e
