@@ -10,6 +10,7 @@ import http.server
 import json
 import os
 import socketserver
+import threading
 
 # Always serve the game folder, even if the shell cwd is elsewhere (e.g. wrong terminal tab).
 _ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -108,19 +109,22 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         out_path = os.path.join(_ROOT, "data", "levelData.json")
         tmp_path = out_path + ".tmp"
-        try:
-            os.makedirs(os.path.dirname(out_path), exist_ok=True)
-            with open(tmp_path, "w", encoding="utf-8", newline="\n") as f:
-                f.write(text)
-            os.replace(tmp_path, out_path)
-        except OSError as e:
+        # Serialize concurrent saves so the tmp-file + os.replace handoff
+        # doesn't race under the threaded server.
+        with self.server.save_lock:
             try:
-                if os.path.isfile(tmp_path):
-                    os.remove(tmp_path)
-            except OSError:
-                pass
-            self.send_error(500, f"Write failed: {e}")
-            return
+                os.makedirs(os.path.dirname(out_path), exist_ok=True)
+                with open(tmp_path, "w", encoding="utf-8", newline="\n") as f:
+                    f.write(text)
+                os.replace(tmp_path, out_path)
+            except OSError as e:
+                try:
+                    if os.path.isfile(tmp_path):
+                        os.remove(tmp_path)
+                except OSError:
+                    pass
+                self.send_error(500, f"Write failed: {e}")
+                return
 
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -134,6 +138,9 @@ class _Server(http.server.ThreadingHTTPServer):
     # kernel and the browser sees ERR_CONNECTION_REFUSED on random files.
     request_queue_size = 256
     daemon_threads = True
+    # Serialize writes to data/levelData.json across concurrent Save Level
+    # POSTs so the tmp-file + os.replace handoff stays atomic.
+    save_lock = threading.Lock()
 
 
 def _bind_server(start_port: int, attempts: int = 30):

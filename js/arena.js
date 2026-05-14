@@ -394,25 +394,72 @@ function addEnvironmentalProps(parent) {
 }
 
 function addCustomProps(parent) {
-    for (const def of customPropDefs) {
-        if (!def || !def.asset) continue;
+    let added = 0;
+    let skipped = 0;
+    let mirrored = 0;
+    const skippedDetails = [];
+    for (let i = 0; i < customPropDefs.length; i++) {
+        const def = customPropDefs[i];
+        if (!def || !def.asset) {
+            skipped++;
+            skippedDetails.push({ index: i, id: def?.id ?? '<no def>', reason: 'no asset field' });
+            continue;
+        }
         const url = CUSTOM_PROP_URL_PREFIX + def.asset;
         const root = new THREE.Group();
         root.name = def.id || 'custom';
         root.position.set(def.x ?? 0, def.y ?? 0, def.z ?? 0);
         root.rotation.set(def.rx ?? 0, def.ry ?? 0, def.rz ?? 0);
-        root.scale.setScalar(def.scale ?? 1);
+        // Per-axis scale (sx/sy/sz) wins over the uniform `scale` so non-uniform
+        // edits authored in the editor render at their true proportions.
+        let sx, sy, sz;
+        if (typeof def.sx === 'number' || typeof def.sy === 'number' || typeof def.sz === 'number') {
+            sx = def.sx ?? 1; sy = def.sy ?? 1; sz = def.sz ?? 1;
+        } else {
+            sx = sy = sz = def.scale ?? 1;
+        }
+        root.scale.set(sx, sy, sz);
 
         // Clone from the preloaded asset cache. If the GLB failed to load
         // the prop is simply omitted — no placeholder flicker, no late pop-in.
         const mesh = cloneAsset(url);
         if (mesh) {
+            // Mirrored scale (negative determinant) flips triangle winding; with
+            // the default FrontSide materials the whole prop back-face-culls to
+            // invisible. Switch its materials to DoubleSide so the editor's
+            // mirror operations still render. Material clone is required because
+            // cloneAsset shares material refs across every instance of the GLB.
+            if (sx * sy * sz < 0) {
+                applyDoubleSide(mesh);
+                mirrored++;
+            }
             root.add(mesh);
             parent.add(root);
+            added++;
         } else {
-            console.warn('[customProp] missing GLB, skipping visual:', url);
+            console.warn('[customProp] missing GLB, skipping visual:', url, '(def #' + i + ', id=' + def.id + ')');
+            skipped++;
+            skippedDetails.push({ index: i, id: def.id, asset: def.asset, reason: 'cloneAsset returned null' });
         }
     }
+    console.log(`[customProp] summary: ${added} added, ${skipped} skipped, ${mirrored} mirrored, ${customPropDefs.length} defs total`);
+    if (skipped > 0) console.table(skippedDetails);
+}
+
+function applyDoubleSide(root) {
+    root.traverse(child => {
+        if (!child.isMesh || !child.material) return;
+        if (Array.isArray(child.material)) {
+            child.material = child.material.map(m => {
+                const c = m.clone();
+                c.side = THREE.DoubleSide;
+                return c;
+            });
+        } else {
+            child.material = child.material.clone();
+            child.material.side = THREE.DoubleSide;
+        }
+    });
 }
 
 // Hazard Vat — procedural toon-shaded geometry.

@@ -140,8 +140,13 @@ export async function importLevel(editor) {
         const node = cloneAsset(source);
         node.position.set(p.x ?? 0, p.y ?? 0, p.z ?? 0);
         node.rotation.set(p.rx ?? 0, p.ry ?? 0, p.rz ?? 0);
-        const s = p.scale ?? 1;
-        node.scale.setScalar(s);
+        // Scale: per-axis (sx/sy/sz) wins over uniform (scale) so non-uniform
+        // edits round-trip without collapsing to scale.x.
+        if (typeof p.sx === 'number' || typeof p.sy === 'number' || typeof p.sz === 'number') {
+            node.scale.set(p.sx ?? 1, p.sy ?? 1, p.sz ?? 1);
+        } else {
+            node.scale.setScalar(p.scale ?? 1);
+        }
         node.name = `Prop: ${p.id} [${p.asset}]`;
         node.userData = { kind: 'customProp', id: p.id, asset: p.asset };
         editor.addObject(node);
@@ -206,7 +211,54 @@ export async function importLevel(editor) {
     );
 }
 
+// Top-level scene children imported via the editor's File → Import (Loader.js
+// sets scene.name = filename and adds without any userData.kind tag) are
+// invisible to the customProp traversal below. Promote any matching node to a
+// customProp here so the user's GLB drops actually persist into levelData.json.
+//
+// Match rule: direct child of editor.scene, no userData.kind already, has a
+// .name that ends with .glb or .gltf. Filename becomes the `asset` (the game
+// resolves it under /assets/CorridorKit/). IDs collide-check against every
+// existing userData.id in the scene so we don't overwrite a custom_N already
+// in use elsewhere in the level.
+function autoTagUntaggedProps(editor) {
+    const existingIds = new Set();
+    editor.scene.traverse(node => {
+        const id = node.userData?.id;
+        if (id) existingIds.add(id);
+    });
+
+    let counter = 0;
+    const nextId = () => {
+        let id;
+        do { id = `custom_${counter++}`; } while (existingIds.has(id));
+        existingIds.add(id);
+        return id;
+    };
+
+    let tagged = 0;
+    for (const child of editor.scene.children) {
+        if (child.userData?.kind) continue;
+        if (child.isLight || child.isCamera) continue;
+        const m = (child.name || '').match(/([^/\\]+\.(?:glb|gltf))$/i);
+        if (!m) continue;
+        const asset = m[1];
+        child.userData = {
+            ...(child.userData || {}),
+            kind: 'customProp',
+            id: nextId(),
+            asset,
+        };
+        tagged++;
+    }
+    if (tagged > 0) {
+        console.log(`[zombie-blaster-level] auto-tagged ${tagged} imported GLB prop(s) for save`);
+    }
+}
+
 export async function saveLevel(editor) {
+    autoTagUntaggedProps(editor);
+
     const unmapped = editor.scene.userData?.zombieBlasterUnmapped ?? {};
     const out = {
         version: unmapped.version ?? 1,
@@ -249,7 +301,18 @@ export async function saveLevel(editor) {
             if (node.rotation.x) prop.rx = round(node.rotation.x);
             if (node.rotation.y) prop.ry = round(node.rotation.y);
             if (node.rotation.z) prop.rz = round(node.rotation.z);
-            prop.scale = round(node.scale.x);
+            // Non-uniform scale gets per-axis fields so editor edits actually
+            // round-trip; uniform scale stays as a single `scale` for back-compat.
+            const sx = round(node.scale.x);
+            const sy = round(node.scale.y);
+            const sz = round(node.scale.z);
+            if (sx === sy && sx === sz) {
+                prop.scale = sx;
+            } else {
+                prop.sx = sx;
+                prop.sy = sy;
+                prop.sz = sz;
+            }
             out.customProps.push(prop);
         } else if (k === 'enemySpawn') {
             out.enemySpawns.push({
