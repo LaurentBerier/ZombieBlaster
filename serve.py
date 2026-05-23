@@ -169,11 +169,13 @@ if __name__ == "__main__":
     httpd, bound = _bind_server(want)
     with httpd:
         print()
-        print("  Zombie Blaster — serve.py (ES module MIME types)")
-        print("  Do not use: python -m http.server  (wrong Content-Type for .js on Windows)")
+        print("  Zombie Blaster dev server (ES modules need application/javascript — do not use python -m http.server on Windows)")
+        print(f"  Serving:    {_ROOT}")
+        print(f"  Editor:     {_EDITOR_ROOT}")
         if bound != want:
             print(f"  Port {want} was busy — using {bound} instead.")
-        print(f"  http://localhost:{bound}/")
+        print(f"  Game URL:   http://127.0.0.1:{bound}/index.html")
+        print(f"  Editor URL: http://127.0.0.1:{bound}/editor/")
         print()
         httpd.serve_forever()
 
