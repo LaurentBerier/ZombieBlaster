@@ -41,6 +41,58 @@ const STATUS_SPEED_MULT = {
 // Knockback decay per second (applied as ^dt each frame for frame-rate independence).
 const KNOCKBACK_DECAY = 0.0025; // ~0.82 per frame @60fps
 
+// Vertical extent of a zombie standing on the floor — used to skip walls
+// whose footprint is entirely above the enemy's head (eg ceiling beams).
+const ENEMY_TOP_Y = 2.0;
+
+// Resolve any overlap between this enemy's footprint circle and an axis-aligned
+// wall box, pushing the enemy out along the shortest exit. Mirrors the player's
+// circle-vs-rect slide so zombies bunch against walls/custom props the same way
+// the player does. Mutates enemy.root.position.
+function resolveEnemyWallCollision(enemy) {
+    const radius = enemy.hitRadius * 0.7;
+    const radiusSq = radius * radius;
+    const pos = enemy.root.position;
+
+    for (let i = 0; i < ARENA.walls.length; i++) {
+        const wall = ARENA.walls[i];
+        if (wall.isPlatform) continue;
+        // Wall sitting entirely above the zombie's head — walk straight under.
+        if (wall.minY >= ENEMY_TOP_Y) continue;
+
+        const px = pos.x;
+        const pz = pos.z;
+        const insideX = px > wall.minX && px < wall.maxX;
+        const insideZ = pz > wall.minZ && pz < wall.maxZ;
+
+        if (insideX && insideZ) {
+            // Enemy walked straight into the box — eject along the axis with
+            // the smallest penetration so the path of least correction wins.
+            const left = px - wall.minX;
+            const right = wall.maxX - px;
+            const near = pz - wall.minZ;
+            const far = wall.maxZ - pz;
+            const minPen = Math.min(left, right, near, far);
+            if (minPen === left) pos.x = wall.minX - radius;
+            else if (minPen === right) pos.x = wall.maxX + radius;
+            else if (minPen === near) pos.z = wall.minZ - radius;
+            else pos.z = wall.maxZ + radius;
+            continue;
+        }
+
+        const closestX = insideX ? px : (px < wall.minX ? wall.minX : wall.maxX);
+        const closestZ = insideZ ? pz : (pz < wall.minZ ? wall.minZ : wall.maxZ);
+        const dx = px - closestX;
+        const dz = pz - closestZ;
+        const distSq = dx * dx + dz * dz;
+        if (distSq < radiusSq && distSq > 0.0001) {
+            const dist = Math.sqrt(distSq);
+            pos.x = closestX + (dx / dist) * radius;
+            pos.z = closestZ + (dz / dist) * radius;
+        }
+    }
+}
+
 // Walk the bodyGroup tree and record every material with emissive support.
 // We clone shared materials on first touch so flash tinting on one enemy
 // doesn't bleed into every other GLB clone.
@@ -101,9 +153,19 @@ const MAX_ENEMIES = 60;
 const enemies = [];
 const ENEMY_TYPES = {
     ZOMBIE: 'zombie',
+    ZOMBIE_2: 'zombie_2',
     FAST_ZOMBIE: 'fast_zombie',
     TANK_ZOMBIE: 'tank_zombie',
     BOSS: 'boss',
+};
+
+// Per-type GLB asset ids. Variants without attack/death entries fall back to
+// looping the walk clip during attack and to the procedural death squash.
+const ENEMY_ASSETS = {
+    [ENEMY_TYPES.ZOMBIE]:      { walk: 'enemy_zombie', attack: 'enemy_zombie_attack', death: 'enemy_zombie_death' },
+    [ENEMY_TYPES.ZOMBIE_2]:    { walk: 'enemy_zombie_2' },
+    [ENEMY_TYPES.FAST_ZOMBIE]: { walk: 'enemy_zombie', attack: 'enemy_zombie_attack', death: 'enemy_zombie_death' },
+    [ENEMY_TYPES.TANK_ZOMBIE]: { walk: 'enemy_zombie', attack: 'enemy_zombie_attack', death: 'enemy_zombie_death' },
 };
 
 // Wave management
@@ -129,13 +191,20 @@ const waveState = {
 // (placeholder geometry stays in that case). Boss enemies always use placeholder
 // geometry — they have no GLB asset.
 function applyGLBToEnemy(enemy) {
-    const model = cloneAsset('enemy_zombie');
+    const assetIds = ENEMY_ASSETS[enemy.type];
+    if (!assetIds) return false;
+    const model = cloneAsset(assetIds.walk);
     if (!model) return false;
 
     enemy.bodyGroup.clear();
     // Drop any prior mixer so we don't tick a detached skeleton.
     enemy.mixer = null;
     enemy.animAction = null;
+    enemy.walkAction = null;
+    enemy.attackAction = null;
+    enemy.deathAction = null;
+    enemy.deathClipDuration = 0;
+    enemy.activeAnim = null;
 
     // Fit the raw model bbox to our target height so re-exported assets
     // with different source scales continue to render at the right size.
@@ -156,21 +225,63 @@ function applyGLBToEnemy(enemy) {
     enemy.squashScale.set(1, 1, 1);
     enemy.useGLB = true;
 
+    // Three.js computes each Mesh's bounding sphere once from the bind pose.
+    // For skinned meshes the animated extent can poke outside that sphere, and
+    // when the camera is close enough that the static sphere falls behind the
+    // near plane / outside the frustum, the mesh gets wrongly culled and the
+    // zombie pops out of view. Disable per-mesh culling on the whole tree —
+    // the cost is negligible (zombies are already on-screen by definition once
+    // they're chasing the player) and it kills the disappearing bug.
+    model.traverse(child => { child.frustumCulled = false; });
+
     // Set up animation mixer if the asset brought skeletal clips along with it.
-    // Play the first clip (walk) looping — each enemy needs its own mixer bound
-    // to its own cloned skeleton, which cloneAsset handled via SkeletonUtils.
-    const clips = getAssetAnimations('enemy_zombie');
-    if (clips.length > 0) {
+    // Each enemy needs its own mixer bound to its own cloned skeleton, which
+    // cloneAsset handled via SkeletonUtils. Walk and attack clips live in
+    // separate GLBs but share the same Zombie_1 skeleton — three.js binds
+    // clip tracks to bones by name, so playing both on this mixer works.
+    const walkClips = getAssetAnimations(assetIds.walk);
+    const attackClips = assetIds.attack ? getAssetAnimations(assetIds.attack) : [];
+    if (walkClips.length > 0) {
         enemy.mixer = new THREE.AnimationMixer(model);
-        const clip = clips[0];
-        const action = enemy.mixer.clipAction(clip);
-        action.setLoop(THREE.LoopRepeat, Infinity);
+
+        const walkClip = walkClips[0];
+        const walkAction = enemy.mixer.clipAction(walkClip);
+        walkAction.setLoop(THREE.LoopRepeat, Infinity);
         // 1.3 → 30% faster than authored so the unsteady walk has a touch more urgency.
-        action.timeScale = 1.3;
+        walkAction.timeScale = 1.3;
         // Random phase offset so a crowd of zombies doesn't march in lockstep.
-        action.time = Math.random() * clip.duration;
-        action.play();
-        enemy.animAction = action;
+        walkAction.time = Math.random() * walkClip.duration;
+        walkAction.play();
+        enemy.walkAction = walkAction;
+        enemy.animAction = walkAction;
+        enemy.activeAnim = 'walk';
+
+        if (attackClips.length > 0) {
+            const attackClip = attackClips[0];
+            const attackAction = enemy.mixer.clipAction(attackClip);
+            attackAction.setLoop(THREE.LoopRepeat, Infinity);
+            attackAction.timeScale = 1.0;
+            // Leave base weight at the default 1 and DON'T call play() yet —
+            // the cross-fade in updateEnemies will reset/play/fadeIn when the
+            // enemy first enters attack range. Pre-zeroing the weight here
+            // would break fadeIn permanently: three.js multiplies base weight
+            // by the fade interpolant, so weight=0 × (0..1) = 0 ⇒ T-pose.
+            enemy.attackAction = attackAction;
+        }
+
+        // Death clip plays once and clamps on the final frame — combined with
+        // the 2 s static hold in updateEnemies, the zombie collapses, sits in
+        // the dead pose, then despawns. clampWhenFinished is critical: without
+        // it the action returns to bind pose (T-pose) at clip end.
+        const deathClips = assetIds.death ? getAssetAnimations(assetIds.death) : [];
+        if (deathClips.length > 0) {
+            const deathClip = deathClips[0];
+            enemy.deathClipDuration = deathClip.duration;
+            const deathAction = enemy.mixer.clipAction(deathClip);
+            deathAction.setLoop(THREE.LoopOnce, 1);
+            deathAction.clampWhenFinished = true;
+            enemy.deathAction = deathAction;
+        }
     }
 
     // Rebuild tint-material list now that bodyGroup was re-populated from the GLB.
@@ -322,9 +433,14 @@ function spawnEnemy(type, position) {
     enemy.impactFlashColor = null;
     resetTint(enemy);
 
+    // Per-enemy uniform scale jitter — ±10% around the type's base size, kept
+    // uniform across X/Y/Z so squash/stretch can't stretch them into balloons.
+    // Bosses skip the jitter (they're meant to read as singular).
+    const sizeJitter = 0.9 + Math.random() * 0.2;
+
     // Configure by type
     switch (type) {
-        case ENEMY_TYPES.ZOMBIE:
+        case ENEMY_TYPES.ZOMBIE: {
             enemy.type = type;
             enemy.health = 30 + waveState.currentWave * 3;
             enemy.maxHealth = enemy.health;
@@ -332,12 +448,28 @@ function spawnEnemy(type, position) {
             enemy.damage = 8 + waveState.currentWave;
             enemy.hitRadius = 0.7;
             enemy.scoreValue = 100;
-            enemy.bodyGroup.scale.set(1, 1, 1);
-            enemy.targetBodyScale.set(1, 1, 1);
+            const s = 1.0 * sizeJitter;
+            enemy.bodyGroup.scale.setScalar(s);
+            enemy.targetBodyScale.setScalar(s);
             setEnemyColors(enemy, 0x00cc99, COLORS.magenta);
             break;
+        }
 
-        case ENEMY_TYPES.FAST_ZOMBIE:
+        case ENEMY_TYPES.ZOMBIE_2: {
+            enemy.type = type;
+            enemy.health = 30 + waveState.currentWave * 3;
+            enemy.maxHealth = enemy.health;
+            enemy.speed = 2.0 + Math.random() * 1.0;
+            enemy.damage = 8 + waveState.currentWave;
+            enemy.hitRadius = 0.7;
+            enemy.scoreValue = 120;
+            const s = 1.0 * sizeJitter;
+            enemy.bodyGroup.scale.setScalar(s);
+            enemy.targetBodyScale.setScalar(s);
+            break;
+        }
+
+        case ENEMY_TYPES.FAST_ZOMBIE: {
             enemy.type = type;
             enemy.health = 20 + waveState.currentWave * 2;
             enemy.maxHealth = enemy.health;
@@ -345,12 +477,14 @@ function spawnEnemy(type, position) {
             enemy.damage = 6 + waveState.currentWave;
             enemy.hitRadius = 0.5;
             enemy.scoreValue = 150;
-            enemy.bodyGroup.scale.set(0.7, 0.9, 0.7);
-            enemy.targetBodyScale.set(0.7, 0.9, 0.7);
+            const s = 0.8 * sizeJitter;
+            enemy.bodyGroup.scale.setScalar(s);
+            enemy.targetBodyScale.setScalar(s);
             setEnemyColors(enemy, 0x00ff88, COLORS.lime);
             break;
+        }
 
-        case ENEMY_TYPES.TANK_ZOMBIE:
+        case ENEMY_TYPES.TANK_ZOMBIE: {
             enemy.type = type;
             enemy.health = 100 + waveState.currentWave * 10;
             enemy.maxHealth = enemy.health;
@@ -358,10 +492,12 @@ function spawnEnemy(type, position) {
             enemy.damage = 20 + waveState.currentWave * 2;
             enemy.hitRadius = 1.0;
             enemy.scoreValue = 300;
-            enemy.bodyGroup.scale.set(1.4, 1.3, 1.4);
-            enemy.targetBodyScale.set(1.4, 1.3, 1.4);
+            const s = 1.4 * sizeJitter;
+            enemy.bodyGroup.scale.setScalar(s);
+            enemy.targetBodyScale.setScalar(s);
             setEnemyColors(enemy, 0x990066, COLORS.violet);
             break;
+        }
 
         case ENEMY_TYPES.BOSS:
             enemy.type = type;
@@ -371,8 +507,9 @@ function spawnEnemy(type, position) {
             enemy.damage = 30;
             enemy.hitRadius = 2.0;
             enemy.scoreValue = 2000;
-            enemy.bodyGroup.scale.set(2.5, 2.5, 2.5);
-            enemy.targetBodyScale.set(2.5, 2.5, 2.5);
+            // Bosses use a fixed uniform scale (no jitter — they're singular).
+            enemy.bodyGroup.scale.setScalar(2.5);
+            enemy.targetBodyScale.setScalar(2.5);
             setEnemyColors(enemy, COLORS.hotPink, COLORS.magenta);
             break;
     }
@@ -417,27 +554,34 @@ function updateEnemies(dt, onAttackPlayer, onStatusKill) {
     enemies.forEach(enemy => {
         if (!enemy.alive) return;
 
-        // Advance skeletal animation (walk loop). Status effects slow the playback
-        // so shocked/frozen zombies visibly stagger. Dying enemies freeze mid-pose.
-        if (enemy.mixer && enemy.animState !== 'dying') {
-            const mixerSpeedMult = STATUS_SPEED_MULT[enemy.statusEffect.type] ?? 1.0;
+        // Advance skeletal animation. Status effects slow the playback so
+        // shocked/frozen zombies visibly stagger. Dying enemies tick at
+        // normal speed so the death clip isn't slowed by lingering status.
+        if (enemy.mixer) {
+            const isDying = enemy.animState === 'dying';
+            const mixerSpeedMult = isDying ? 1.0 : (STATUS_SPEED_MULT[enemy.statusEffect.type] ?? 1.0);
             enemy.mixer.update(dt * mixerSpeedMult);
         }
 
-        // Death animation
+        // Death — GLB clip handles the visual collapse; we just wait out the
+        // total (clip duration + 2 s static hold on the last frame) and
+        // despawn. clampWhenFinished on the death action keeps the bones
+        // pinned to the final pose during the hold.
+        // Fallback (no death clip, eg boss with placeholder geometry): the
+        // legacy procedural squash + sink keeps a visible death feedback.
         if (enemy.animState === 'dying') {
             enemy.deathTimer += dt;
-            const t = enemy.deathTimer / 0.5; // 0.5s death animation
+            const total = enemy.deathTotalDuration ?? 0.5;
 
-            // Squash and shrink
-            enemy.bodyGroup.scale.y = enemy.squashScale.y * (1 - t * 0.8);
-            enemy.bodyGroup.scale.x = enemy.squashScale.x * (1 + t * 0.3);
-            enemy.bodyGroup.scale.z = enemy.squashScale.z * (1 + t * 0.3);
+            if (!enemy.deathAction) {
+                const t = Math.min(enemy.deathTimer / total, 1);
+                enemy.bodyGroup.scale.y = enemy.squashScale.y * (1 - t * 0.8);
+                enemy.bodyGroup.scale.x = enemy.squashScale.x * (1 + t * 0.3);
+                enemy.bodyGroup.scale.z = enemy.squashScale.z * (1 + t * 0.3);
+                enemy.root.position.y = -t * 0.5;
+            }
 
-            // Fade
-            enemy.root.position.y = -t * 0.5;
-
-            if (enemy.deathTimer >= 0.5) {
+            if (enemy.deathTimer >= total) {
                 enemy.alive = false;
                 enemy.root.visible = false;
                 enemy.root.position.y = 0;
@@ -519,6 +663,34 @@ function updateEnemies(dt, onAttackPlayer, onStatusKill) {
         const speedMult = STATUS_SPEED_MULT[status.type] ?? 1.0;
         const effectiveSpeed = enemy.speed * speedMult;
 
+        // Cross-fade between walk and attack clips based on engagement range.
+        // Stunned enemies stay on walk (the stagger sells the knockback).
+        // Attack always restarts from frame 0 (reset() before fadeIn); walk
+        // resumes from its previous phase so the gait stays continuous.
+        //
+        // The .enabled = true line on each side is load-bearing: when a
+        // fadeOut completes, three.js sets action.enabled = false on the
+        // faded-out action. play() activates the action in the mixer's list
+        // but does NOT re-enable it — so a subsequent fadeIn evaluates to 0
+        // and the bones snap to bind pose (T-pose). reset() handles this for
+        // attack (it sets enabled = true internally); walk needs it manually
+        // because we deliberately skip reset() to preserve gait phase.
+        if (enemy.walkAction && enemy.attackAction) {
+            const desiredAnim = (dist <= enemy.attackRange && !stunned) ? 'attack' : 'walk';
+            if (enemy.activeAnim !== desiredAnim) {
+                if (desiredAnim === 'attack') {
+                    enemy.walkAction.fadeOut(0.2);
+                    enemy.attackAction.enabled = true;
+                    enemy.attackAction.reset().play().fadeIn(0.2);
+                } else {
+                    enemy.attackAction.fadeOut(0.2);
+                    enemy.walkAction.enabled = true;
+                    enemy.walkAction.play().fadeIn(0.2);
+                }
+                enemy.activeAnim = desiredAnim;
+            }
+        }
+
         if (dist > enemy.attackRange && !stunned) {
             // Move towards player
             toPlayer.normalize();
@@ -568,6 +740,11 @@ function updateEnemies(dt, onAttackPlayer, onStatusKill) {
                 enemy.root.position.add(sep);
             }
         });
+
+        // Push out of any wall AABB. Done last so AI move, knockback, and
+        // inter-enemy separation can all freely shove the enemy first; the
+        // wall resolve has the final say.
+        resolveEnemyWallCollision(enemy);
     });
 }
 
@@ -608,9 +785,30 @@ function damageEnemy(enemy, damage, opts = {}) {
     if (enemy.health <= 0) {
         enemy.animState = 'dying';
         enemy.deathTimer = 0;
-        // Snapshot current scale so the death animation squashes from the live pose,
-        // not a stale value from enemy creation time.
+        // Snapshot current scale so the procedural fallback squashes from the
+        // live pose; harmless when the GLB death clip is driving instead.
         enemy.squashScale.copy(enemy.bodyGroup.scale);
+
+        if (enemy.deathAction) {
+            // Cross-fade walk/attack out and play the death clip once. The
+            // clip ends with clampWhenFinished pinning the dead pose; we hold
+            // there for 2 s before despawning. .enabled = true is required
+            // (same reason as walk/attack: play() doesn't re-enable a
+            // previously faded-out action — though for death this only matters
+            // on pool recycling, where the prior life's death action got
+            // disabled at clip end).
+            enemy.walkAction?.fadeOut(0.2);
+            enemy.attackAction?.fadeOut(0.2);
+            enemy.deathAction.enabled = true;
+            enemy.deathAction.reset();
+            enemy.deathAction.play();
+            enemy.deathTotalDuration = enemy.deathClipDuration + 2.0;
+            enemy.activeAnim = 'death';
+        } else {
+            // Procedural fallback (bosses & GLB load failures): old 0.5 s squash.
+            enemy.deathTotalDuration = 0.5;
+        }
+
         return true; // Enemy killed
     }
     return false; // Enemy still alive
@@ -694,6 +892,8 @@ function spawnWaveEnemy() {
         type = ENEMY_TYPES.TANK_ZOMBIE;
     } else if (wave >= 2 && rand < 0.35) {
         type = ENEMY_TYPES.FAST_ZOMBIE;
+    } else if (rand < 0.7) {
+        type = ENEMY_TYPES.ZOMBIE_2;
     }
 
     const enemy = spawnEnemy(type, spawnPos);

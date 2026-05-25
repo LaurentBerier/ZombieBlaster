@@ -290,8 +290,9 @@ function attachFirstPersonGlbMesh(mesh, glbRoot, opts = {}) {
     const px = opts.positionX ?? 0.02;
     const py = opts.positionY ?? -0.1;
     const pz = opts.positionZ ?? -0.35;
+    const ryOffset = opts.rotationYOffset ?? 0;
     glbRoot.scale.setScalar(scale);
-    glbRoot.rotation.set(-0.08, Math.PI * 1.5, 0);
+    glbRoot.rotation.set(-0.08, Math.PI * 1.5 + ryOffset, 0);
     glbRoot.position.set(px, py, pz);
     applyNeonAccentGlow(glbRoot);
     mesh.add(glbRoot);
@@ -301,6 +302,14 @@ function attachFirstPersonGlbMesh(mesh, glbRoot, opts = {}) {
 const FP_WEAPON_2_3_MESH_OPTS = {
     scaleScalar: 0.9,
     positionY: -0.03,
+};
+
+// Shotgun GLB ships rotated 90° from the other guns and authored smaller, so
+// add a +90° yaw and a 1.5x scale bump on top of the shared base.
+const FP_WEAPON_3_MESH_OPTS = {
+    ...FP_WEAPON_2_3_MESH_OPTS,
+    rotationYOffset: Math.PI / 2,
+    scaleScalar: FP_WEAPON_2_3_MESH_OPTS.scaleScalar * 1.5,
 };
 
 // Build first-person weapon meshes.
@@ -339,7 +348,7 @@ function createWeaponMeshes() {
         } else if (i === 2) {
             const emberGun = cloneAsset('weapon_ember_blaster');
             if (emberGun) {
-                attachFirstPersonGlbMesh(mesh, emberGun, FP_WEAPON_2_3_MESH_OPTS);
+                attachFirstPersonGlbMesh(mesh, emberGun, FP_WEAPON_3_MESH_OPTS);
             } else {
                 addWeaponPlaceholder(mesh, def, i);
             }

@@ -311,11 +311,13 @@ function gameLoop() {
 }
 
 function updateGameplay(dt) {
-    // 1. Input & Player Movement
-    const inputState = updatePlayer(dt);
+    // Snapshot alive enemies first so player movement can collide against them.
+    const aliveEnemies = getAliveEnemies();
+
+    // 1. Input & Player Movement (collides with walls + alive zombies)
+    const inputState = updatePlayer(dt, aliveEnemies);
 
     // 2. Weapons
-    const aliveEnemies = getAliveEnemies();
     updateWeapons(dt, aliveEnemies, onWeaponHit);
 
     // 3. Enemies (DoT kills route through onStatusKill to keep score consistent)

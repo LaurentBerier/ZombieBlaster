@@ -9,6 +9,7 @@ import errno
 import http.server
 import json
 import os
+import socket
 import socketserver
 import threading
 
@@ -16,16 +17,24 @@ import threading
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 os.chdir(_ROOT)
 
-# Three.js editor checkout. Lives two levels up from this serve.py
-# (Games/three.js_Editor, while we're at Games/ZombieBlaster/ZombieBlaster).
-# Four URL prefixes get mapped onto its tree so the editor's importmap
-# (../build/, ../examples/jsm/, ../files/) keeps working.
-_EDITOR_ROOT = os.path.normpath(os.path.join(_ROOT, "..", "..", "three.js_Editor"))
+# Three.js editor checkout. Sibling of this game's folder
+# (games/three.js_Editor, while we're at games/Zombie_Blaster).
+# Five URL prefixes get mapped onto its tree so the editor's importmap
+# (../build/, ../examples/jsm/, ../files/, ../src/) keeps working.
+_EDITOR_ROOT = os.path.normpath(os.path.join(_ROOT, "..", "three.js_Editor"))
 _EDITOR_PREFIXES = ("/editor/", "/build/", "/examples/", "/files/", "/src/")
+
+# Folders under assets/ that contain custom-prop GLBs. Both the level editor
+# (tools/zombie-blaster-level.js) and the game runtime (js/arena.js) call
+# /api/asset-kits to learn which kit folder each prop filename lives in, so
+# adding a new kit only requires dropping its name in here.
+_KIT_FOLDERS = ("CorridorKit", "arenaKit")
 
 
 def _requested_port() -> int:
-    return int(os.environ.get("PORT", "8080"))
+    # 8090 by default so Polliniate (on 8080) and Zombie Blaster can run side
+    # by side without fighting for the same port.
+    return int(os.environ.get("PORT", "8090"))
 
 
 def _addr_in_use(err: OSError) -> bool:
@@ -51,6 +60,40 @@ _extensions.update(
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     extensions_map = _extensions
+
+    def do_GET(self) -> None:
+        path = self.path.split("?", 1)[0]
+        if path == "/api/asset-kits":
+            self._serve_asset_kits()
+            return
+        super().do_GET()
+
+    def _serve_asset_kits(self) -> None:
+        # Return { filename: "kit_folder", ... } for every .glb under each
+        # known kit folder. Filename collisions across kits warn on the server
+        # console; last writer wins so the manifest stays a flat map.
+        manifest = {}
+        for kit in _KIT_FOLDERS:
+            kit_dir = os.path.join(_ROOT, "assets", kit)
+            if not os.path.isdir(kit_dir):
+                continue
+            for name in os.listdir(kit_dir):
+                if not name.lower().endswith(".glb"):
+                    continue
+                if name in manifest and manifest[name] != kit:
+                    print(f"  [asset-kits] WARNING: {name} exists in both "
+                          f"{manifest[name]} and {kit}; using {kit}.")
+                manifest[name] = kit
+
+        body = json.dumps(manifest).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        # Editor and game both fetch this once at boot; bypass any CDN/proxy
+        # cache so a fresh GLB drop shows up on the next page load.
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
 
     def translate_path(self, path: str) -> str:
         clean = path.split("?", 1)[0].split("#", 1)[0]
@@ -138,9 +181,22 @@ class _Server(http.server.ThreadingHTTPServer):
     # kernel and the browser sees ERR_CONNECTION_REFUSED on random files.
     request_queue_size = 256
     daemon_threads = True
+    # ThreadingHTTPServer defaults these to True. On Windows that lets a second
+    # process bind the same port and the kernel splits incoming connections
+    # between them — so a stray Polliniate server on 8080 silently steals half
+    # the requests. Disable both and let _bind_server roll forward to 8081+.
+    allow_reuse_address = False
+    allow_reuse_port = False
     # Serialize writes to data/levelData.json across concurrent Save Level
     # POSTs so the tmp-file + os.replace handoff stays atomic.
     save_lock = threading.Lock()
+
+    def server_bind(self) -> None:
+        # SO_EXCLUSIVEADDRUSE is Windows-only and guarantees no other socket
+        # can bind this port while we hold it, regardless of their reuse flags.
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
 
 
 def _bind_server(start_port: int, attempts: int = 30):

@@ -6,12 +6,36 @@
 import { scene, COLORS, NEON_PALETTE, createToonMaterial, addOutline } from './scene.js';
 import { cloneAsset } from './assetLoader.js';
 
-// Prefix applied to every custom-prop GLB so its cache key matches the URL
-// used at asset-preload time (see collectCustomPropAssets below).
-const CUSTOM_PROP_URL_PREFIX = 'assets/CorridorKit/';
+// Custom-prop GLBs live under one of several kit folders (CorridorKit,
+// arenaKit, …). The server exposes a /api/asset-kits manifest that maps
+// every kit GLB's bare filename to the folder it lives in, so the level
+// schema can keep storing just the filename. CorridorKit is the default
+// fallback for legacy entries authored before the manifest existed and
+// for cases where the fetch fails.
+const DEFAULT_KIT_FOLDER = 'CorridorKit';
+let assetKitMap = {};
+
+async function loadAssetKitManifest() {
+    try {
+        const resp = await fetch('/api/asset-kits', { cache: 'no-store' });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        assetKitMap = await resp.json();
+    } catch (e) {
+        console.warn('Could not load /api/asset-kits, falling back to CorridorKit-only:', e);
+        assetKitMap = {};
+    }
+}
+
+function customPropUrl(assetFilename) {
+    const kit = assetKitMap[assetFilename] ?? DEFAULT_KIT_FOLDER;
+    return `assets/${kit}/${assetFilename}`;
+}
 
 let customPropDefs = [];
 let customEnemySpawns = [];
+// AABB colliders authored in the level editor (Menubar.File → Add Collider).
+// Shape: { id, cx, cy, cz, w, h, d }. Picked up by buildArena → addColliders.
+let colliderDefs = [];
 
 // Arena layout: interconnected chambers
 // Main hall (center), Lab West, Lab East, Corridor North, Vault South
@@ -76,8 +100,14 @@ let lightDefs = [
 // Exported so main.js can fetch it before preloading assets, letting the asset loader
 // include designer-imported custom-prop GLBs in its up-front preload pass.
 async function loadLevelData() {
+    // Asset-kit map must be ready before collectCustomPropAssets runs,
+    // and that fires straight after loadLevelData in main.js — so fetch
+    // both in parallel here.
     try {
-        const response = await fetch('data/levelData.json', { cache: 'no-store' });
+        const [response] = await Promise.all([
+            fetch('data/levelData.json', { cache: 'no-store' }),
+            loadAssetKitManifest(),
+        ]);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
 
@@ -87,6 +117,7 @@ async function loadLevelData() {
         pumpPositions = data.props.pumps.map(p => ({ x: p.x, z: p.z, rx: p.rx, ry: p.ry, rz: p.rz, scale: p.scale }));
         customPropDefs = Array.isArray(data.customProps) ? data.customProps.slice() : [];
         customEnemySpawns = Array.isArray(data.enemySpawns) ? data.enemySpawns.slice() : [];
+        colliderDefs = Array.isArray(data.colliders) ? data.colliders.slice() : [];
         platDefs = data.platforms.map(p => ({ x: p.x, y: p.y, z: p.z, w: p.w, d: p.d }));
         lightDefs = data.lights.map(l => ({
             x: l.x, y: l.y, z: l.z,
@@ -112,7 +143,7 @@ function collectCustomPropAssets(levelData) {
     const extras = [];
     for (const def of props) {
         if (!def || !def.asset) continue;
-        const url = CUSTOM_PROP_URL_PREFIX + def.asset;
+        const url = customPropUrl(def.asset);
         if (seen.has(url)) continue;
         seen.add(url);
         extras.push({ id: url, url, type: 'gltf' });
@@ -150,6 +181,9 @@ async function buildArena(preloadedLevelData) {
 
     // Add platforms in main hall
     addPlatforms(arenaGroup);
+
+    // Designer-authored AABB colliders (invisible — collision only).
+    addColliders();
 
     // If the level defines explicit enemy spawn points, replace the auto-generated
     // perimeter spawns so wave spawner uses the designer's placements.
@@ -405,7 +439,7 @@ function addCustomProps(parent) {
             skippedDetails.push({ index: i, id: def?.id ?? '<no def>', reason: 'no asset field' });
             continue;
         }
-        const url = CUSTOM_PROP_URL_PREFIX + def.asset;
+        const url = customPropUrl(def.asset);
         const root = new THREE.Group();
         root.name = def.id || 'custom';
         root.position.set(def.x ?? 0, def.y ?? 0, def.z ?? 0);
@@ -599,6 +633,22 @@ function addPlatforms(parent) {
             minY: 0, maxY: p.y + 0.2,
             isPlatform: true,
             topY: p.y + 0.2,
+        });
+    });
+}
+
+// Designer-authored collider boxes (Menubar.File → Add Collider in the editor).
+// Pure AABBs — no mesh, no light, just a wall entry the player/enemy/projectile
+// collision loops pick up. cx/cy/cz is the box centre; w/h/d the full extents.
+function addColliders() {
+    colliderDefs.forEach(c => {
+        const w = c.w ?? 0, h = c.h ?? 0, d = c.d ?? 0;
+        if (w <= 0 || h <= 0 || d <= 0) return;
+        const cx = c.cx ?? 0, cy = c.cy ?? 0, cz = c.cz ?? 0;
+        ARENA.walls.push({
+            minX: cx - w / 2, maxX: cx + w / 2,
+            minY: cy - h / 2, maxY: cy + h / 2,
+            minZ: cz - d / 2, maxZ: cz + d / 2,
         });
     });
 }

@@ -12,10 +12,13 @@ import { cloneSkinned } from './lib/SkeletonUtils.js';
 const ASSET_MANIFEST = {
     weapon_biohazard: { type: 'gltf', url: 'assets/Weapons/1_Neon_Biohazard_Blaste_0415181024_texture.glb' },
     weapon_plasma_coil: { type: 'gltf', url: 'assets/Weapons/2_Meshy_AI_Neon_Coil_Plasma_Rifl_0416160536_texture.glb' },
-    weapon_ember_blaster: { type: 'gltf', url: 'assets/Weapons/3_Weapon_Neon_Ember_Blaster_0417161106_texture.glb' },
+    weapon_ember_blaster: { type: 'gltf', url: 'assets/Weapons/New_Gun/3_Shotgun_futuristic.glb' },
     weapon_neon_plasma_blaster: { type: 'gltf', url: 'assets/Weapons/4_Meshy_AI_Neon_Plasma_Blaster_0416221538_texture.glb' },
     weapon_rogue_prefab: { type: 'object', url: 'assets/imports/PlayerCharacter.roguePrefab' },
-    enemy_zombie:      { type: 'gltf', url: 'assets/Characters/Zombie_1/Zombie_1_Unsteady_Walk_withSkin.glb' },
+    enemy_zombie:        { type: 'gltf', url: 'assets/Characters/Zombie_1/Zombie_1_Unsteady_Walk_withSkin.glb' },
+    enemy_zombie_attack: { type: 'gltf', url: 'assets/Characters/Zombie_1/Zombie_1__Charged_1.glb' },
+    enemy_zombie_death:  { type: 'gltf', url: 'assets/Characters/Zombie_1/Zombie_1__Dead.glb' },
+    enemy_zombie_2:      { type: 'gltf', url: 'assets/Characters/Zombie_2/Zombie_2_Unsteady_Walk_withSkin.glb' },
 };
 
 // Loaded and standardized entries, keyed by asset id.

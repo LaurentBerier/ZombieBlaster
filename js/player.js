@@ -178,7 +178,7 @@ function onContextMenu(e) {
     e.preventDefault();
 }
 
-function updatePlayer(dt) {
+function updatePlayer(dt, aliveEnemies) {
     if (!PLAYER.isAlive) return;
 
     // Clamp dt to prevent physics explosions
@@ -291,7 +291,14 @@ function updatePlayer(dt) {
         const dz = newPos.z - closestZ;
         const distSq = dx * dx + dz * dz;
 
-        if (distSq < playerRadius * playerRadius && newPos.y < wall.maxY) {
+        // Vertical overlap: player camera at newPos.y, feet at newPos.y - playerHeight.
+        // Skip walls entirely above the player's head (eg ceiling beams) and walls
+        // entirely below the player's feet (sub-floor colliders, if any).
+        if (
+            distSq < playerRadius * playerRadius &&
+            newPos.y > wall.minY &&
+            newPos.y - playerHeight < wall.maxY
+        ) {
             const dist = Math.sqrt(distSq);
             if (dist > 0.001) {
                 const pushX = dx / dist;
@@ -301,6 +308,30 @@ function updatePlayer(dt) {
             }
         }
     });
+
+    // Enemy collision — push the player out of each living zombie's footprint
+    // circle so you can't phase through them on the chase. Mass model: the
+    // player slides, the zombie stays put. (Enemies already stop at attackRange
+    // ≈ 1.8, so this only kicks in when the player runs into them.) Dying
+    // enemies are ignored so corpses don't block the room.
+    if (Array.isArray(aliveEnemies)) {
+        for (let i = 0; i < aliveEnemies.length; i++) {
+            const enemy = aliveEnemies[i];
+            if (!enemy || !enemy.alive || enemy.animState === 'dying') continue;
+            const ex = enemy.root.position.x;
+            const ez = enemy.root.position.z;
+            const dx = newPos.x - ex;
+            const dz = newPos.z - ez;
+            const distSq = dx * dx + dz * dz;
+            const combined = playerRadius + (enemy.hitRadius ?? 0.7);
+            if (distSq < combined * combined && distSq > 0.0001) {
+                const dist = Math.sqrt(distSq);
+                const overlap = combined - dist;
+                newPos.x += (dx / dist) * overlap;
+                newPos.z += (dz / dist) * overlap;
+            }
+        }
+    }
 
     // Platform collision (vertical)
     let onPlatform = false;
