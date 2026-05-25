@@ -356,7 +356,9 @@ function spawnPopup(position, isCritical = false) {
     updatePopupTexture(popup.sprite, POPUP_TEXTS[textIdx], POPUP_COLORS[colorIdx]);
 
     popup.sprite.position.copy(position);
-    popup.sprite.position.y += 1 + Math.random() * 0.5;
+    // Small offset so the popup sits just above the head (callers pass the
+    // enemy's head world position).
+    popup.sprite.position.y += 0.2 + Math.random() * 0.15;
     popup.sprite.visible = true;
     popup.sprite.scale.set(0.1, 0.05, 1);
 
@@ -425,7 +427,9 @@ function spawnDamageNumber(position, damage, isCritical = false) {
     entry.isCritical = isCritical;
     drawDamageNumber(entry.sprite, damage, isCritical);
     entry.sprite.position.copy(position);
-    entry.sprite.position.y += 1.5 + Math.random() * 0.4;
+    // Small offset so the damage number sits just above the head (callers pass
+    // the enemy's head world position).
+    entry.sprite.position.y += 0.25 + Math.random() * 0.15;
     entry.sprite.position.x += (Math.random() - 0.5) * 0.4;
     entry.sprite.scale.set(isCritical ? 1.6 : 1.1, isCritical ? 0.8 : 0.55, 1);
     entry.sprite.material.opacity = 1.0;

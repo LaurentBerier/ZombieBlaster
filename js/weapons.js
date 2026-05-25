@@ -10,6 +10,8 @@ import { weaponGroup } from './player.js';
 import { cloneAsset } from './assetLoader.js';
 import { spawnPlasmaTrail, spawnSmokeTrail, spawnChainLightning, spawnExplosion, spawnDropletTrail } from './effects.js';
 
+const INFINITE_AMMO = true;
+
 // Weapon definitions - the Franken-Gun arsenal.
 // fx block: per-weapon impact reaction used by onWeaponHit in main.js.
 //   element        — drives enemy tint color ('fire'|'shock'|'acid'|'freeze')
@@ -512,11 +514,13 @@ function updateWeapons(dt, enemies, onHitCallback) {
     if (keys.fire && weaponState.fireTimer <= 0 && weaponState.currentAmmo[weaponState.currentIndex] > 0) {
         fireWeapon(weapon, evolution, enemies, onHitCallback);
         weaponState.fireTimer = evolution.fireRate;
-        weaponState.currentAmmo[weaponState.currentIndex]--;
+        if (!INFINITE_AMMO) {
+            weaponState.currentAmmo[weaponState.currentIndex]--;
 
-        // Auto-reload when empty
-        if (weaponState.currentAmmo[weaponState.currentIndex] <= 0 && weaponState.reserveAmmo[weaponState.currentIndex] > 0) {
-            startReload();
+            // Auto-reload when empty
+            if (weaponState.currentAmmo[weaponState.currentIndex] <= 0 && weaponState.reserveAmmo[weaponState.currentIndex] > 0) {
+                startReload();
+            }
         }
     }
 
@@ -617,7 +621,7 @@ function performHitscan(origin, dir, evolution, weapon, enemies, onHitCallback) 
     let closestDist = Infinity;
 
     enemies.forEach(enemy => {
-        if (!enemy.alive || !enemy.root.visible) return;
+        if (!enemy.alive || !enemy.root.visible || enemy.animState === 'dying') return;
 
         // Use bounding sphere check against enemy body center (not root at y=0)
         const enemyPos = enemy.root.position.clone();
@@ -659,7 +663,7 @@ function performHitscan(origin, dir, evolution, weapon, enemies, onHitCallback) 
                 const hitSet = new Set([hitEnemy]);
 
                 enemies.forEach(enemy => {
-                    if (!enemy.alive || hitSet.has(enemy) || chainCount >= weapon.chainTargets) return;
+                    if (!enemy.alive || enemy.animState === 'dying' || hitSet.has(enemy) || chainCount >= weapon.chainTargets) return;
                     const enemyCenter = enemy.root.position.clone();
                     enemyCenter.y = 1.0;
                     const dist = enemyCenter.distanceTo(lastPos);
@@ -805,7 +809,7 @@ function updateProjectiles(dt, enemies, onHitCallback) {
         let hit = false;
 
         enemies.forEach(enemy => {
-            if (!enemy.alive || !enemy.root.visible || hit) return;
+            if (!enemy.alive || !enemy.root.visible || enemy.animState === 'dying' || hit) return;
             const enemyCenter = enemy.root.position.clone();
             enemyCenter.y = 1.0; // Body center height
             const dist = proj.position.distanceTo(enemyCenter);

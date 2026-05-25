@@ -18,7 +18,9 @@ const ASSET_MANIFEST = {
     enemy_zombie:        { type: 'gltf', url: 'assets/Characters/Zombie_1/Zombie_1_Unsteady_Walk_withSkin.glb' },
     enemy_zombie_attack: { type: 'gltf', url: 'assets/Characters/Zombie_1/Zombie_1__Charged_1.glb' },
     enemy_zombie_death:  { type: 'gltf', url: 'assets/Characters/Zombie_1/Zombie_1__Dead.glb' },
-    enemy_zombie_2:      { type: 'gltf', url: 'assets/Characters/Zombie_2/Zombie_2_Unsteady_Walk_withSkin.glb' },
+    enemy_zombie_2:        { type: 'gltf', url: 'assets/Characters/Zombie_2/Zombie_2_Unsteady_Walk_withSkin.glb' },
+    enemy_zombie_2_attack: { type: 'gltf', url: 'assets/Characters/Zombie_2/Zombie_2__Charged_1.glb' },
+    enemy_zombie_2_death:  { type: 'gltf', url: 'assets/Characters/Zombie_2/Zombie_2__Dead.glb' },
 };
 
 // Loaded and standardized entries, keyed by asset id.

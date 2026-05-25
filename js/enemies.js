@@ -18,6 +18,11 @@ const ZOMBIE_TARGET_HEIGHT = 2.0;
 // it in line with the player/weapon sizes.
 const ZOMBIE_EXTRA_SCALE = 0.01;
 
+// Lift the Armature this far above the floor. The Blender Armature origin sits
+// at the heel; without a small bias the toes/sole geometry clip into the floor
+// surface and shadow popping is visible.
+const ZOMBIE_GROUND_OFFSET = 0.08;
+
 // Reused during applyGLBToEnemy bbox computation.
 const _bbox = new THREE.Box3();
 const _bboxSize = new THREE.Vector3();
@@ -163,7 +168,7 @@ const ENEMY_TYPES = {
 // looping the walk clip during attack and to the procedural death squash.
 const ENEMY_ASSETS = {
     [ENEMY_TYPES.ZOMBIE]:      { walk: 'enemy_zombie', attack: 'enemy_zombie_attack', death: 'enemy_zombie_death' },
-    [ENEMY_TYPES.ZOMBIE_2]:    { walk: 'enemy_zombie_2' },
+    [ENEMY_TYPES.ZOMBIE_2]:    { walk: 'enemy_zombie_2', attack: 'enemy_zombie_2_attack', death: 'enemy_zombie_2_death' },
     [ENEMY_TYPES.FAST_ZOMBIE]: { walk: 'enemy_zombie', attack: 'enemy_zombie_attack', death: 'enemy_zombie_death' },
     [ENEMY_TYPES.TANK_ZOMBIE]: { walk: 'enemy_zombie', attack: 'enemy_zombie_attack', death: 'enemy_zombie_death' },
 };
@@ -205,6 +210,7 @@ function applyGLBToEnemy(enemy) {
     enemy.deathAction = null;
     enemy.deathClipDuration = 0;
     enemy.activeAnim = null;
+    enemy.headBone = null;
 
     // Fit the raw model bbox to our target height so re-exported assets
     // with different source scales continue to render at the right size.
@@ -213,8 +219,22 @@ function applyGLBToEnemy(enemy) {
     const rawHeight = _bboxSize.y || 1;
     const scale = (ZOMBIE_TARGET_HEIGHT / rawHeight) * ZOMBIE_EXTRA_SCALE;
     model.scale.setScalar(scale);
-    // Lift so the scaled bbox minY sits at bodyGroup y=0 (feet on the floor).
-    model.position.y = -_bbox.min.y * scale;
+
+    // Anchor on the "Armature" node (skeleton root). The Blender export places
+    // the Armature at the character's feet, which is a stable ground reference —
+    // unlike the bbox bottom, which moves around as the skinned mesh deforms
+    // during animation (causing float/sink). Pinning Armature to bodyGroup
+    // local y=0 also survives squash/stretch on bodyGroup.scale: 0 × sy = 0.
+    const armature = model.getObjectByName('Armature');
+    if (armature) {
+        model.updateMatrixWorld(true);
+        const armatureWorld = new THREE.Vector3();
+        armature.getWorldPosition(armatureWorld);
+        model.position.y = -armatureWorld.y + ZOMBIE_GROUND_OFFSET;
+    } else {
+        // Asset missing the conventional Armature name — fall back to bbox.
+        model.position.y = -_bbox.min.y * scale + ZOMBIE_GROUND_OFFSET;
+    }
 
     // GLB forward axis already aligns with root.rotation from atan2(toPlayer.x, toPlayer.z) — no Y flip.
     model.rotation.y = 0;
@@ -233,6 +253,10 @@ function applyGLBToEnemy(enemy) {
     // the cost is negligible (zombies are already on-screen by definition once
     // they're chasing the player) and it kills the disappearing bug.
     model.traverse(child => { child.frustumCulled = false; });
+
+    // Cache the "Head" bone (shared name across Zombie_1 and Zombie_2 skeletons)
+    // so popups can anchor to the live world-space head position.
+    enemy.headBone = model.getObjectByName('Head') || null;
 
     // Set up animation mixer if the asset brought skeletal clips along with it.
     // Each enemy needs its own mixer bound to its own cloned skeleton, which
@@ -396,6 +420,11 @@ function createEnemyObject() {
         // Target scale for bodyGroup restore after squash (overridden when GLB is used)
         targetBodyScale: new THREE.Vector3(1, 1, 1),
         useGLB: false,
+        // Cached "Head" bone from the GLB skeleton — used as anchor for HUD popups
+        // (score, damage numbers) so they appear just above the zombie's head and
+        // track its world position as the animation plays. Null until applyGLBToEnemy
+        // assigns it; bosses (no GLB) keep null and fall through to a procedural offset.
+        headBone: null,
         // Skeletal animation state (set in applyGLBToEnemy when the GLB has clips).
         mixer: null,
         animAction: null,
@@ -433,10 +462,10 @@ function spawnEnemy(type, position) {
     enemy.impactFlashColor = null;
     resetTint(enemy);
 
-    // Per-enemy uniform scale jitter — ±10% around the type's base size, kept
+    // Per-enemy uniform scale jitter — ±5% around the type's base size, kept
     // uniform across X/Y/Z so squash/stretch can't stretch them into balloons.
     // Bosses skip the jitter (they're meant to read as singular).
-    const sizeJitter = 0.9 + Math.random() * 0.2;
+    const sizeJitter = 0.95 + Math.random() * 0.1;
 
     // Configure by type
     switch (type) {
@@ -861,18 +890,9 @@ function startWave(onWaveStart, onBossWave) {
 }
 
 function spawnWaveEnemy() {
-    // Pick spawn point far from player
-    const playerPos = getPlayerPosition();
-    let bestSpawn = ARENA.spawnPoints[0];
-    let bestDist = 0;
-
-    ARENA.spawnPoints.forEach(sp => {
-        const dist = Math.sqrt((sp.x - playerPos.x) ** 2 + (sp.z - playerPos.z) ** 2);
-        if (dist > bestDist) {
-            bestDist = dist;
-            bestSpawn = sp;
-        }
-    });
+    // Round-robin through all spawn points so every spawner gets used each wave
+    const points = ARENA.spawnPoints;
+    const bestSpawn = points[waveState.enemiesSpawned % points.length];
 
     // Add some randomness to spawn position
     const spawnPos = {
@@ -934,9 +954,24 @@ function resetEnemies() {
     waveState.totalKills = 0;
 }
 
+// World-space position of the enemy's head — anchor for HUD popups so the
+// score / damage text sits just above the head and follows the skeletal
+// animation. Uses the cached "Head" bone when present (Zombie_1 / Zombie_2
+// GLBs); falls back to a procedural offset for bosses (no GLB).
+function getEnemyHeadWorldPos(enemy, target) {
+    if (enemy.headBone) {
+        enemy.headBone.getWorldPosition(target);
+    } else {
+        target.copy(enemy.root.position);
+        target.y += 1.65 * (enemy.bodyGroup.scale.y || 1);
+    }
+    return target;
+}
+
 export {
     enemies, waveState, ENEMY_TYPES,
     initEnemies, updateEnemies, updateWaves,
     damageEnemy, getAliveEnemies, resetEnemies,
+    getEnemyHeadWorldPos,
     spawnEnemy,
 };

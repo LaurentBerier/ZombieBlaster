@@ -641,16 +641,22 @@ function addPlatforms(parent) {
 // Pure AABBs — no mesh, no light, just a wall entry the player/enemy/projectile
 // collision loops pick up. cx/cy/cz is the box centre; w/h/d the full extents.
 function addColliders() {
+    let added = 0;
     colliderDefs.forEach(c => {
         const w = c.w ?? 0, h = c.h ?? 0, d = c.d ?? 0;
-        if (w <= 0 || h <= 0 || d <= 0) return;
+        if (w <= 0 || h <= 0 || d <= 0) {
+            console.warn('[collider] skipped (non-positive extent):', c);
+            return;
+        }
         const cx = c.cx ?? 0, cy = c.cy ?? 0, cz = c.cz ?? 0;
         ARENA.walls.push({
             minX: cx - w / 2, maxX: cx + w / 2,
             minY: cy - h / 2, maxY: cy + h / 2,
             minZ: cz - d / 2, maxZ: cz + d / 2,
         });
+        added++;
     });
+    console.log(`[collider] registered ${added}/${colliderDefs.length} designer colliders as walls`);
 }
 
 function addNeonLighting(parent) {

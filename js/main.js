@@ -15,7 +15,7 @@ import {
 } from './weapons.js';
 import {
     enemies, waveState, initEnemies, updateEnemies, updateWaves,
-    damageEnemy, getAliveEnemies, resetEnemies,
+    damageEnemy, getAliveEnemies, resetEnemies, getEnemyHeadWorldPos,
 } from './enemies.js';
 import {
     scoreState, initGameLogic, addKill, updateCombo, onPlayerDamaged,
@@ -39,6 +39,7 @@ import { preloadAssets } from './assetLoader.js';
 
 // Scratch vector reused each frame — avoid per-call allocations in hot path.
 const _scratchDir = new THREE.Vector3();
+const _scratchHeadPos = new THREE.Vector3();
 
 // Game states
 const GAME_STATES = {
@@ -391,9 +392,12 @@ function onWeaponHit(enemy, hitPoint, damage, weaponIndex, hitContext = {}) {
     }
 
     // Damage number — skip splash victims unless it's a kill to avoid visual clutter.
+    // Anchor on the enemy's head bone so the text sits just above the head instead
+    // of floating wherever the bullet happened to intersect (torso, legs, etc).
     if (!hitContext.fromSplash || killed) {
         const isCritDmg = damage >= enemy.maxHealth * 0.5;
-        spawnDamageNumber(hitPoint, damage, isCritDmg || (killed && scoreState.comboMultiplier >= 3));
+        const headPos = getEnemyHeadWorldPos(enemy, _scratchHeadPos);
+        spawnDamageNumber(headPos, damage, isCritDmg || (killed && scoreState.comboMultiplier >= 3));
     }
 
     // Screen shake — kill upgrades to killShake if present.
@@ -409,7 +413,7 @@ function onWeaponHit(enemy, hitPoint, damage, weaponIndex, hitContext = {}) {
         playSFX('combo_ding');
         spawnDeathSplat(hitPoint);
         const isCritical = scoreState.comboMultiplier >= 3;
-        spawnPopup(hitPoint, isCritical);
+        spawnPopup(getEnemyHeadWorldPos(enemy, _scratchHeadPos), isCritical);
     }
 
     // Primary-impact-only splash effects. Splash victims already took damage via AoE,
@@ -439,7 +443,7 @@ function onStatusKill(enemy, hitPoint, weaponIndex) {
     playSFX('enemy_death');
     playSFX('combo_ding');
     spawnDeathSplat(hitPoint);
-    spawnPopup(hitPoint, scoreState.comboMultiplier >= 3);
+    spawnPopup(getEnemyHeadWorldPos(enemy, _scratchHeadPos), scoreState.comboMultiplier >= 3);
 }
 
 // Per-frame acid-pool damage tick: any enemy standing inside an active pool
