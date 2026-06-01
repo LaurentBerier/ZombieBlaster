@@ -9,10 +9,39 @@
 
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 
-const LEVEL_URL = '/data/levelData.json';
-const ASSET_KITS_URL = '/api/asset-kits';
+// Optional URL prefix for all server paths used by this adapter. Defaults to
+// '' for the standalone setup (editor + game on same origin). The Sandscape
+// embed sets this to e.g. '/_game/8090' so a Vite dev-server proxy routes
+// relative fetches and three.js loaders to the external game dev server
+// without CORS or cross-origin module concerns.
+let _BASE = '';
+
+export function setBaseUrl(url) {
+    _BASE = ( url || '' ).replace( /\/+$/, '' );
+    // DRACO's decoder path is baked at construction, so force a re-init on
+    // the next loader request after base changes.
+    _dracoLoader = null;
+}
+
+let _dracoLoader = null;
+function getDracoLoader() {
+    if ( _dracoLoader ) return _dracoLoader;
+    _dracoLoader = new DRACOLoader();
+    _dracoLoader.setDecoderPath( `${_BASE}/js/lib/draco/gltf/` );
+    _dracoLoader.setDecoderConfig( { type: 'js' } );
+    _dracoLoader.preload();
+    return _dracoLoader;
+}
+
+function createGLTFLoader() {
+    const loader = new GLTFLoader();
+    loader.setDRACOLoader( getDracoLoader() );
+    return loader;
+}
+
 // Filename offered when the editor downloads the saved level JSON.
 // The user manually drops the file into data/ to replace the live level.
 const SAVE_FILENAME = 'levelData.json';
@@ -25,7 +54,7 @@ const DEFAULT_KIT_FOLDER = 'CorridorKit';
 
 async function fetchAssetKitMap() {
     try {
-        const resp = await fetch(ASSET_KITS_URL, { cache: 'no-store' });
+        const resp = await fetch(`${_BASE}/api/asset-kits`, { cache: 'no-store' });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         return await resp.json();
     } catch (e) {
@@ -36,7 +65,7 @@ async function fetchAssetKitMap() {
 
 function assetUrl(kitMap, filename) {
     const kit = kitMap[filename] ?? DEFAULT_KIT_FOLDER;
-    return `/assets/${kit}/${filename}`;
+    return `${_BASE}/assets/${kit}/${filename}`;
 }
 
 const ROOM_COLOR = 0x00ff88;
@@ -120,7 +149,7 @@ export async function importLevel(editor) {
     // 1. Pull the level JSON.
     let level;
     try {
-        const resp = await fetch(LEVEL_URL);
+        const resp = await fetch(`${_BASE}/data/levelData.json`);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         level = await resp.json();
     } catch (e) {
@@ -133,7 +162,7 @@ export async function importLevel(editor) {
     // correct kit folder under /assets/.
     const kitMap = await fetchAssetKitMap();
     const uniqueAssets = [...new Set((level.customProps ?? []).map(p => p.asset))];
-    const loader = new GLTFLoader();
+    const loader = createGLTFLoader();
     const cache = new Map();
 
     const origTitle = document.title;
@@ -259,30 +288,19 @@ export async function importLevel(editor) {
         editor.addObject(light);
     }
 
-    // Hide props by default — the GLBs are 370k+ verts and tank the editor's
-    // frame rate while panning the camera or dragging a collider gizmo. The
-    // designer toggles them back on (File → Toggle Props Visibility) only when
-    // they need spatial context.
-    let hiddenProps = 0;
-    editor.scene.traverse(n => {
-        if (n.userData?.kind === 'customProp') {
-            n.visible = false;
-            hiddenProps++;
-        }
-    });
-    editor.scene.userData.zbPropsHidden = hiddenProps > 0;
-    if (editor.signals?.sceneGraphChanged) {
-        editor.signals.sceneGraphChanged.dispatch();
-    }
+    // Visibility for customProp meshes and collider wireframes is owned by
+    // the editor's View menu (Menubar.View.js) — its objectAdded handler
+    // applies the current toggle state to each addObject() above. Defaults:
+    // meshes visible, colliders hidden. Toggle via View → Meshes / Colliders.
 
     console.log(
         `[zombie-blaster-level] imported ` +
         `${level.rooms?.length ?? 0} room(s), ` +
-        `${level.customProps?.length ?? 0} prop(s) (auto-hidden for fast camera), ` +
+        `${level.customProps?.length ?? 0} prop(s), ` +
         `${level.enemySpawns?.length ?? 0} spawn(s), ` +
         `${level.lights?.length ?? 0} light(s), ` +
-        `${level.colliders?.length ?? 0} collider(s) ` +
-        `· File → Toggle Props Visibility to show. Autosave neutralised — use Save Level to persist.`
+        `${level.colliders?.length ?? 0} collider(s). ` +
+        `Autosave neutralised — use Save Level to persist.`
     );
 }
 
@@ -615,7 +633,7 @@ export async function saveLevel(editor) {
     }
 
     try {
-        const resp = await fetch('/api/save-level', {
+        const resp = await fetch(`${_BASE}/api/save-level`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(out, null, 2),

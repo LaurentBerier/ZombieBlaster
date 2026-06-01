@@ -6,7 +6,21 @@
 // ============================================
 
 import { GLTFLoader } from './lib/GLTFLoader.js';
+import { DRACOLoader } from './lib/DRACOLoader.js';
 import { cloneSkinned } from './lib/SkeletonUtils.js';
+
+// Shared Draco decoder for KHR_draco_mesh_compression GLBs.
+// JS decoder (no .wasm) — matches js/lib/draco/gltf/ from Three.js r129.
+const dracoLoader = new DRACOLoader();
+dracoLoader.setDecoderPath('js/lib/draco/gltf/');
+dracoLoader.setDecoderConfig({ type: 'js' });
+dracoLoader.preload();
+
+function createGLTFLoader() {
+    const loader = new GLTFLoader();
+    loader.setDRACOLoader(dracoLoader);
+    return loader;
+}
 
 // Asset registry: id -> source descriptor (served from game root)
 const ASSET_MANIFEST = {
@@ -96,7 +110,7 @@ export function preloadAssets({ extras = [], onProgress } = {}) {
         return Promise.resolve();
     }
 
-    const loader = new GLTFLoader();
+    const loader = createGLTFLoader();
     const objectLoader = new THREE.ObjectLoader();
 
     // Per-entry state for aggregated byte-progress display.

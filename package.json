@@ -3,6 +3,10 @@
   "version": "1.0.0",
   "description": "Zombie Blaster — standalone Three.js browser game. Run: python serve.py",
   "scripts": {
-    "start": "python serve.py"
+    "start": "python serve.py",
+    "compress-assets": "node tools/compress-assets.mjs"
+  },
+  "devDependencies": {
+    "@gltf-transform/cli": "^4.1.3"
   }
 }
