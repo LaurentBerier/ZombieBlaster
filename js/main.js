@@ -217,14 +217,27 @@ function setupMenuHandlers() {
     // Audio settings (reachable from title and pause)
     setupSettingsHandlers();
 
-    // ESC for pause
+    // ESC handling. During gameplay the pointer is locked, and the browser
+    // swallows the ESC keydown that exits the lock — the page never receives it.
+    // That's why ESC used to need two presses to pause. So we pause on the
+    // pointerlockchange that the lock-exit fires (below), and only handle ESC
+    // keydown directly here for unpausing and the rare no-lock case.
     document.addEventListener('keydown', (e) => {
-        if (e.code === 'Escape') {
-            if (gameState === GAME_STATES.PLAYING) {
-                pauseGame();
-            } else if (gameState === GAME_STATES.PAUSED) {
-                resumeGame();
-            }
+        if (e.code !== 'Escape') return;
+        if (gameState === GAME_STATES.PLAYING) {
+            // Fallback only when the pointer isn't locked (lock failed); when
+            // locked, the pointerlockchange handler below does the pausing.
+            if (!document.pointerLockElement) pauseGame();
+        } else if (gameState === GAME_STATES.PAUSED) {
+            resumeGame();
+        }
+    });
+
+    // Losing the pointer lock during play (ESC, or alt-tab / focus loss) pauses
+    // the game — this is what lets a single ESC open the pause menu.
+    document.addEventListener('pointerlockchange', () => {
+        if (!document.pointerLockElement && gameState === GAME_STATES.PLAYING) {
+            pauseGame();
         }
     });
 
