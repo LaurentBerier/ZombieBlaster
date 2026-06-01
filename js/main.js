@@ -91,7 +91,7 @@ async function init() {
     const customPropAssets = collectCustomPropAssets(levelData);
     updateLoadingBar(7, 'GATHERING ASSETS...');
 
-    // ---- Phase 3: preload every GLB + roguePrefab (7% -> 85%) ----
+    // ---- Phase 3: preload every GLB (7% -> 85%) ----
     // The bar within this phase is driven by per-file load events, and the
     // text line shows the current file, the N-of-M count, and byte progress
     // when the server reports Content-Length.

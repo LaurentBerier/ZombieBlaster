@@ -1,6 +1,6 @@
 // ============================================
 // Centralized Asset Loader
-// Preloads all GLB models (and roguePrefab JSON) before gameplay starts.
+// Preloads all GLB models before gameplay starts.
 // Consumers call cloneAsset(id) to get independent
 // scene-graph copies ready for Three.js insertion.
 // ============================================
@@ -28,7 +28,6 @@ const ASSET_MANIFEST = {
     weapon_plasma_coil: { type: 'gltf', url: 'assets/Weapons/2_Meshy_AI_Neon_Coil_Plasma_Rifl_0416160536_texture.glb' },
     weapon_ember_blaster: { type: 'gltf', url: 'assets/Weapons/New_Gun/3_Shotgun_futuristic.glb' },
     weapon_neon_plasma_blaster: { type: 'gltf', url: 'assets/Weapons/4_Meshy_AI_Neon_Plasma_Blaster_0416221538_texture.glb' },
-    weapon_rogue_prefab: { type: 'object', url: 'assets/imports/PlayerCharacter.roguePrefab' },
     enemy_zombie:        { type: 'gltf', url: 'assets/Characters/Zombie_1/Zombie_1_Unsteady_Walk_withSkin.glb' },
     enemy_zombie_attack: { type: 'gltf', url: 'assets/Characters/Zombie_1/Zombie_1__Charged_1.glb' },
     enemy_zombie_death:  { type: 'gltf', url: 'assets/Characters/Zombie_1/Zombie_1__Dead.glb' },
@@ -64,9 +63,9 @@ function friendlyName(url) {
 }
 
 /**
- * Preload GLB / roguePrefab assets. Returns a Promise that resolves when
- * every load has either succeeded or failed (never rejects — missing
- * assets fall back to placeholder geometry in their respective modules).
+ * Preload GLB assets (plus any 'object'-type extras). Returns a Promise that
+ * resolves when every load has either succeeded or failed (never rejects —
+ * missing assets fall back to placeholder geometry in their respective modules).
  *
  * @param {object} [options]
  * @param {Array<{id?: string, url: string, type?: 'gltf'|'object'}>} [options.extras]

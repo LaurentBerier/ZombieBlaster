@@ -334,16 +334,7 @@ function createWeaponMeshes() {
             if (biohazardGun) {
                 attachFirstPersonGlbMesh(mesh, biohazardGun);
             } else {
-                const rogueCharacter = cloneAsset('weapon_rogue_prefab');
-                const rogueWeapon = rogueCharacter?.getObjectByName('weapon_rifle');
-                if (rogueWeapon) {
-                    rogueWeapon.scale.setScalar(0.76);
-                    rogueWeapon.rotation.set(-0.08, Math.PI, 0);
-                    rogueWeapon.position.set(0.02, -0.1, -0.35);
-                    mesh.add(rogueWeapon);
-                } else {
-                    addWeaponPlaceholder(mesh, def, i);
-                }
+                addWeaponPlaceholder(mesh, def, i);
             }
         } else if (i === 1) {
             const coilGun = cloneAsset('weapon_plasma_coil');
