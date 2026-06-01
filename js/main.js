@@ -29,7 +29,8 @@ import {
     showHitMarker, resetEffects,
 } from './effects.js';
 import {
-    initAudio, resumeAudio, playSFX, startMusic, stopMusic,
+    initAudio, resumeAudio, playSFX, startMusic, stopMusic, nextMusicTrack,
+    setMusicVolume, setSfxVolume, setMuted, getAudioSettings,
 } from './audio.js';
 import {
     initUI, updateHUD, bumpCombo, announceWave, announceBoss,
@@ -60,6 +61,16 @@ async function init() {
     initUI();
     showScreen('loading');
     updateLoadingBar(0, 'INITIALIZING...');
+
+    // Arm music autostart immediately so the entire loading screen is covered:
+    // the first click/keypress at any point — during loading or on the menu —
+    // starts the soundtrack the moment the browser's autoplay gate opens.
+    armMusicAutostart();
+    // Also attempt playback right now, during loading. On visits where the
+    // browser already permits autoplay (its per-site engagement heuristic) this
+    // starts the music with no click; on a fresh visit it's blocked and the
+    // armed listener above starts it on the first interaction instead.
+    ensureMusicStarted();
 
     // Small delay so the first paint reaches the screen before we start work
     await delay(50);
@@ -136,8 +147,33 @@ async function init() {
     gameState = GAME_STATES.TITLE;
     showScreen('title');
 
+    // Try to start the soundtrack as the menu appears. This succeeds with no
+    // click on revisits where the browser has granted engagement-based autoplay;
+    // on a fresh visit it's blocked, and the listener armed at init() start will
+    // kick it off on the user's first interaction instead.
+    ensureMusicStarted();
+
     // Start game loop
     requestAnimationFrame(gameLoop);
+}
+
+// Kick off the soundtrack as early as the browser allows.
+function ensureMusicStarted() {
+    resumeAudio();
+    startMusic();
+}
+
+let musicAutostartArmed = false;
+function armMusicAutostart() {
+    if (musicAutostartArmed) return;
+    musicAutostartArmed = true;
+    const kick = () => {
+        ensureMusicStarted();
+        window.removeEventListener('pointerdown', kick);
+        window.removeEventListener('keydown', kick);
+    };
+    window.addEventListener('pointerdown', kick);
+    window.addEventListener('keydown', kick);
 }
 
 // Human-readable progress line for the loading screen.
@@ -178,6 +214,9 @@ function setupMenuHandlers() {
     document.getElementById('btn-retry').addEventListener('click', startGame);
     document.getElementById('btn-menu').addEventListener('click', quitToMenu);
 
+    // Audio settings (reachable from title and pause)
+    setupSettingsHandlers();
+
     // ESC for pause
     document.addEventListener('keydown', (e) => {
         if (e.code === 'Escape') {
@@ -199,6 +238,59 @@ function setupMenuHandlers() {
             }
         });
     }
+}
+
+// Audio settings overlay — mute toggle + music/SFX volume sliders. Opened from
+// the title and pause menus; closing just hides the overlay so the screen
+// underneath (title or pause) stays put.
+function setupSettingsHandlers() {
+    const overlay = document.getElementById('settings-overlay');
+    const muteEl = document.getElementById('set-mute');
+    const musicEl = document.getElementById('set-music');
+    const sfxEl = document.getElementById('set-sfx');
+    const musicVal = document.getElementById('set-music-val');
+    const sfxVal = document.getElementById('set-sfx-val');
+    if (!overlay) return;
+
+    // Mirror the live audio settings onto the controls (called on open so the
+    // sliders reflect persisted/localStorage values).
+    function syncControls() {
+        const s = getAudioSettings();
+        muteEl.checked = s.muted;
+        musicEl.value = Math.round(s.musicVolume * 100);
+        sfxEl.value = Math.round(s.sfxVolume * 100);
+        musicVal.textContent = musicEl.value + '%';
+        sfxVal.textContent = sfxEl.value + '%';
+    }
+
+    function openSettings() {
+        // initAudio is a no-op after first call; ensures the graph exists so
+        // changes apply even when opened from the title before play. resumeAudio
+        // un-suspends the context (it starts suspended until a user gesture) so
+        // the SFX preview is audible from the title screen too.
+        initAudio();
+        resumeAudio();
+        syncControls();
+        overlay.classList.remove('hidden');
+    }
+    function closeSettings() {
+        overlay.classList.add('hidden');
+    }
+
+    musicEl.addEventListener('input', () => {
+        setMusicVolume(musicEl.value / 100);
+        musicVal.textContent = musicEl.value + '%';
+    });
+    sfxEl.addEventListener('input', () => {
+        setSfxVolume(sfxEl.value / 100);
+        sfxVal.textContent = sfxEl.value + '%';
+        playSFX('weapon_switch'); // audible preview of the SFX level
+    });
+    muteEl.addEventListener('change', () => setMuted(muteEl.checked));
+
+    document.getElementById('btn-settings').addEventListener('click', openSettings);
+    document.getElementById('btn-settings-pause').addEventListener('click', openSettings);
+    document.getElementById('btn-close-settings').addEventListener('click', closeSettings);
 }
 
 function setupWeaponSwitchInput() {
@@ -238,7 +330,8 @@ function startGame() {
     showScreen('gameplay');
     requestPointerLock();
     resumeAudio();
-    startMusic();
+    // Switch to the other track for gameplay (the menu plays the first track).
+    nextMusicTrack();
 
     // Announce first wave after brief delay
     setTimeout(() => announceWave(1), 1000);
@@ -248,7 +341,8 @@ function pauseGame() {
     gameState = GAME_STATES.PAUSED;
     showScreen('pause');
     exitPointerLock();
-    stopMusic();
+    // Keep the soundtrack playing while paused so the volume can be judged
+    // when the settings panel is opened from here.
 }
 
 function resumeGame() {
@@ -272,8 +366,9 @@ function gameOver() {
 function quitToMenu() {
     gameState = GAME_STATES.TITLE;
     exitPointerLock();
-    stopMusic();
     showScreen('title');
+    // Soundtrack plays on the menu too (restarts if game over had stopped it).
+    startMusic();
 }
 
 // ---- GAME LOOP ----

@@ -9,6 +9,7 @@ import { PLAYER, keys, getPlayerForward, getPlayerPosition } from './player.js';
 import { weaponGroup } from './player.js';
 import { cloneAsset } from './assetLoader.js';
 import { spawnPlasmaTrail, spawnSmokeTrail, spawnChainLightning, spawnExplosion, spawnDropletTrail } from './effects.js';
+import { playSFX } from './audio.js';
 
 const INFINITE_AMMO = true;
 
@@ -24,6 +25,7 @@ const WEAPON_DEFS = [
     {
         name: 'FRANKEN-GUN',
         description: 'Cobbled-together plasma rifle',
+        fireSound: 'weapon_fire',
         fireRate: 0.15,
         damage: 15,
         ammo: 30,
@@ -55,6 +57,7 @@ const WEAPON_DEFS = [
     {
         name: 'BOWLING LAUNCHER',
         description: 'Heavy rocket launcher',
+        fireSound: 'weapon_fire_heavy',
         fireRate: 0.8,
         damage: 60,
         ammo: 8,
@@ -89,6 +92,7 @@ const WEAPON_DEFS = [
     {
         name: 'SODA LASER',
         description: 'Corrosive acid sprayer',
+        fireSound: 'weapon_laser',
         fireRate: 0.05,
         damage: 5,
         ammo: 100,
@@ -123,6 +127,7 @@ const WEAPON_DEFS = [
     {
         name: 'CRYO BLASTER',
         description: 'Continuous freezing-goo stream',
+        fireSound: 'weapon_tesla',
         fireRate: 0.06,
         damage: 7,
         ammo: 80,
@@ -577,6 +582,9 @@ function fireWeapon(weapon, evolution, enemies, onHitCallback) {
     const mesh = weaponState.meshes[weaponState.currentIndex];
     mesh.position.z = 0.05;
     mesh.rotation.x = -0.08;
+
+    // Fire SFX (per-weapon sound, falls back to the standard blaster pop)
+    playSFX(weapon.fireSound || 'weapon_fire');
 
     if (weapon.type === 'hitscan') {
         performHitscan(origin, dir, evolution, weapon, enemies, onHitCallback);

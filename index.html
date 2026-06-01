@@ -29,6 +29,7 @@
             <div class="menu-buttons">
                 <button class="btn-primary" id="btn-start">START GAME</button>
                 <button class="btn-secondary" id="btn-controls">CONTROLS</button>
+                <button class="btn-secondary" id="btn-settings">SETTINGS</button>
             </div>
             <div class="high-score-display">
                 <span class="label">HIGH SCORE:</span>
@@ -112,7 +113,32 @@
         <div class="pause-content">
             <h2>PAUSED</h2>
             <button class="btn-primary" id="btn-resume">RESUME</button>
+            <button class="btn-secondary" id="btn-settings-pause">SETTINGS</button>
             <button class="btn-secondary" id="btn-quit">QUIT TO MENU</button>
+        </div>
+    </div>
+
+    <!-- Settings Overlay (audio mixer) -->
+    <div id="settings-overlay" class="hidden">
+        <div class="settings-content">
+            <h2>AUDIO</h2>
+            <div class="settings-list">
+                <div class="setting-row">
+                    <label class="setting-label" for="set-mute">MUTE</label>
+                    <input type="checkbox" id="set-mute" class="setting-toggle">
+                </div>
+                <div class="setting-row">
+                    <label class="setting-label" for="set-music">MUSIC</label>
+                    <input type="range" id="set-music" class="setting-slider" min="0" max="100" value="50">
+                    <span class="setting-value" id="set-music-val">50%</span>
+                </div>
+                <div class="setting-row">
+                    <label class="setting-label" for="set-sfx">SFX</label>
+                    <input type="range" id="set-sfx" class="setting-slider" min="0" max="100" value="70">
+                    <span class="setting-value" id="set-sfx-val">70%</span>
+                </div>
+            </div>
+            <button class="btn-primary" id="btn-close-settings">DONE</button>
         </div>
     </div>
 

@@ -30,6 +30,7 @@ function initUI() {
         loadingScreen: document.getElementById('loading-screen'),
         titleScreen: document.getElementById('title-screen'),
         controlsOverlay: document.getElementById('controls-overlay'),
+        settingsOverlay: document.getElementById('settings-overlay'),
         hud: document.getElementById('hud'),
         pauseScreen: document.getElementById('pause-screen'),
         gameoverScreen: document.getElementById('gameover-screen'),
@@ -187,7 +188,7 @@ function showWeaponSwitch(index) {
 // Screen management
 function showScreen(screenName) {
     // Hide all
-    ['loadingScreen', 'titleScreen', 'controlsOverlay', 'hud', 'pauseScreen', 'gameoverScreen'].forEach(key => {
+    ['loadingScreen', 'titleScreen', 'controlsOverlay', 'settingsOverlay', 'hud', 'pauseScreen', 'gameoverScreen'].forEach(key => {
         if (elements[key]) elements[key].classList.add('hidden');
     });
 

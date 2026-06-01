@@ -5,9 +5,49 @@
 
 let audioCtx = null;
 let masterGain = null;
-let musicGain = null;
 let sfxGain = null;
 let initialized = false;
+
+// ---- Mixer settings (persisted to localStorage) ----
+// musicVolume / sfxVolume are 0..1 slider levels feeding the music/sfx gain
+// nodes; muted gates both to silence without losing the slider positions.
+const AUDIO_SETTINGS_KEY = 'zb_audio_settings';
+let musicVolume = 0.5;
+let sfxVolume = 0.7;
+let muted = false;
+
+const clamp01 = (v) => Math.max(0, Math.min(1, v));
+
+function loadAudioSettings() {
+    try {
+        const raw = localStorage.getItem(AUDIO_SETTINGS_KEY);
+        if (!raw) return;
+        const s = JSON.parse(raw);
+        if (typeof s.musicVolume === 'number') musicVolume = clamp01(s.musicVolume);
+        if (typeof s.sfxVolume === 'number') sfxVolume = clamp01(s.sfxVolume);
+        if (typeof s.muted === 'boolean') muted = s.muted;
+    } catch (e) {
+        // Corrupt/unavailable storage — keep defaults.
+    }
+}
+
+function saveAudioSettings() {
+    try {
+        localStorage.setItem(AUDIO_SETTINGS_KEY, JSON.stringify({ musicVolume, sfxVolume, muted }));
+    } catch (e) {
+        // Storage unavailable (private mode etc.) — settings just won't persist.
+    }
+}
+
+// Push the current settings onto the audio outputs.
+function applyVolumes() {
+    if (sfxGain) sfxGain.gain.value = muted ? 0 : sfxVolume;
+    // Music plays through a plain <audio> element (NOT the Web Audio graph), so
+    // its level is the element's own .volume. Routing music through Web Audio
+    // is fragile across the context's suspended/resumed states; a bare element
+    // plays reliably the moment the browser's autoplay gate opens.
+    if (musicEl) musicEl.volume = muted ? 0 : musicVolume;
+}
 
 // Sound definitions (ready for asset swap)
 const SOUNDS = {
@@ -37,13 +77,12 @@ function initAudio() {
         masterGain.gain.value = 0.5;
         masterGain.connect(audioCtx.destination);
 
-        musicGain = audioCtx.createGain();
-        musicGain.gain.value = 0.3;
-        musicGain.connect(masterGain);
-
         sfxGain = audioCtx.createGain();
         sfxGain.gain.value = 0.7;
         sfxGain.connect(masterGain);
+
+        loadAudioSettings();
+        applyVolumes();
 
         initialized = true;
     } catch (e) {
@@ -93,59 +132,165 @@ function playSFX(soundName) {
     }
 }
 
-// Simple background music (procedural arcade loop)
-let musicOscillators = [];
+// Procedural zombie growl — layered detuned saw oscillators with an LFO "warble"
+// and a closing lowpass sweep for a guttural, organic snarl. Pitch is randomized
+// per call so repeats from the horde don't sound mechanical.
+//   opts.volume     — 0..1, attenuates the growl (used for distance falloff)
+//   opts.aggressive — shorter, higher, sharper snarl for attack lunges
+function playGrowl(opts = {}) {
+    if (!initialized || !audioCtx) return;
+
+    const volume = Math.max(0, Math.min(1, opts.volume ?? 1));
+    if (volume <= 0.01) return;
+    const aggressive = !!opts.aggressive;
+
+    try {
+        const now = audioCtx.currentTime;
+        const duration = aggressive ? 0.32 : 0.45 + Math.random() * 0.3;
+        // Low guttural base pitch, randomized per growl.
+        const base = (aggressive ? 110 : 70) + Math.random() * 40;
+        const peak = (aggressive ? 0.32 : 0.26) * volume;
+
+        // Output envelope (quick attack, decay over the duration) + distance volume.
+        const out = audioCtx.createGain();
+        out.gain.setValueAtTime(0.0001, now);
+        out.gain.exponentialRampToValueAtTime(peak, now + 0.05);
+        out.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+
+        // Lowpass keeps it muffled/throaty, sweeping down for the growl tail-off.
+        const lp = audioCtx.createBiquadFilter();
+        lp.type = 'lowpass';
+        lp.frequency.setValueAtTime(aggressive ? 1400 : 900, now);
+        lp.frequency.exponentialRampToValueAtTime(300, now + duration);
+        lp.Q.value = 6;
+
+        // Two slightly detuned saw oscillators for a thick, dissonant body, each
+        // sliding down in pitch for the classic growl fall-off.
+        [-7, 7].forEach((detune) => {
+            const osc = audioCtx.createOscillator();
+            osc.type = 'sawtooth';
+            osc.detune.value = detune;
+            osc.frequency.setValueAtTime(base * (aggressive ? 1.4 : 1.2), now);
+            osc.frequency.exponentialRampToValueAtTime(base * 0.6, now + duration);
+            osc.connect(lp);
+            osc.start(now);
+            osc.stop(now + duration + 0.02);
+        });
+
+        // LFO warble modulates the output gain to create the rough "rrrr".
+        const lfo = audioCtx.createOscillator();
+        const lfoGain = audioCtx.createGain();
+        lfo.type = 'sine';
+        lfo.frequency.value = (aggressive ? 22 : 14) + Math.random() * 8;
+        lfoGain.gain.value = peak * 0.5;
+        lfo.connect(lfoGain);
+        lfoGain.connect(out.gain);
+        lfo.start(now);
+        lfo.stop(now + duration + 0.02);
+
+        lp.connect(out);
+        out.connect(sfxGain);
+    } catch (e) {
+        // Ignore audio errors
+    }
+}
+
+// Music playlist — the tracks play one after the other and loop back to the
+// first after the last. Played via a plain <audio> element; the music-volume
+// setting (and mute) drives the element's .volume in applyVolumes().
+const MUSIC_TRACKS = [
+    'assets/Music/ZombieBlaster_1.mp3',
+    'assets/Music/ZombieBlaster_2.mp3',
+];
+let musicEl = null;
+let musicTrackIndex = 0;
 let musicPlaying = false;
-let musicInterval = null;
+
+// Lazily create the shared <audio> element and its playlist auto-advance.
+function ensureMusicEl() {
+    if (musicEl) return;
+    musicEl = new Audio();
+    musicEl.preload = 'auto';
+
+    // Advance through the playlist; wrap to the first track after the last
+    // so the soundtrack loops indefinitely.
+    musicEl.addEventListener('ended', () => {
+        musicTrackIndex = (musicTrackIndex + 1) % MUSIC_TRACKS.length;
+        musicEl.src = MUSIC_TRACKS[musicTrackIndex];
+        if (musicPlaying) musicEl.play().catch(() => {});
+    });
+
+    musicEl.src = MUSIC_TRACKS[musicTrackIndex];
+    applyVolumes();
+}
+
+// Attempt playback of the current track. Calling play() on an already-playing
+// element is a harmless no-op (it does NOT restart the track), while a
+// pre-gesture attempt rejects asynchronously — so not gating on a flag here
+// means the first real user gesture reliably starts playback even if an earlier
+// blocked attempt's rejection hasn't landed yet.
+function playCurrentTrack() {
+    musicPlaying = true;
+    const p = musicEl.play();
+    if (p) p.catch(() => {});
+}
 
 function startMusic() {
-    if (!initialized || musicPlaying) return;
-    musicPlaying = true;
+    ensureMusicEl();
+    playCurrentTrack();
+}
 
-    // Simple bass loop
-    const bassNotes = [60, 60, 72, 60, 55, 55, 67, 55];
-    let noteIndex = 0;
-
-    musicInterval = setInterval(() => {
-        if (!musicPlaying || !audioCtx) {
-            clearInterval(musicInterval);
-            return;
-        }
-
-        try {
-            const osc = audioCtx.createOscillator();
-            const gain = audioCtx.createGain();
-            osc.type = 'square';
-            osc.frequency.setValueAtTime(bassNotes[noteIndex], audioCtx.currentTime);
-            gain.gain.setValueAtTime(0.06, audioCtx.currentTime);
-            gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.2);
-            osc.connect(gain);
-            gain.connect(musicGain);
-            osc.start();
-            osc.stop(audioCtx.currentTime + 0.22);
-
-            noteIndex = (noteIndex + 1) % bassNotes.length;
-        } catch (e) {
-            // Ignore
-        }
-    }, 200); // ~150 BPM
+// Switch to the next track in the playlist (restarting it from the top) and
+// play it. Used when starting a new game so gameplay gets a different track
+// than the menu.
+function nextMusicTrack() {
+    ensureMusicEl();
+    musicTrackIndex = (musicTrackIndex + 1) % MUSIC_TRACKS.length;
+    musicEl.src = MUSIC_TRACKS[musicTrackIndex];
+    playCurrentTrack();
 }
 
 function stopMusic() {
     musicPlaying = false;
-    if (musicInterval) {
-        clearInterval(musicInterval);
-        musicInterval = null;
-    }
+    if (musicEl) musicEl.pause();
+}
+
+// ---- Mixer controls (wired to the settings UI) ----
+function setMusicVolume(vol) {
+    musicVolume = clamp01(vol);
+    applyVolumes();
+    saveAudioSettings();
+}
+
+function setSfxVolume(vol) {
+    sfxVolume = clamp01(vol);
+    applyVolumes();
+    saveAudioSettings();
+}
+
+function setMuted(value) {
+    muted = !!value;
+    applyVolumes();
+    saveAudioSettings();
+}
+
+function toggleMute() {
+    setMuted(!muted);
+    return muted;
+}
+
+function getAudioSettings() {
+    return { musicVolume, sfxVolume, muted };
 }
 
 function setMasterVolume(vol) {
-    if (masterGain) masterGain.gain.value = Math.max(0, Math.min(1, vol));
+    if (masterGain) masterGain.gain.value = clamp01(vol);
 }
 
 export {
     initAudio, resumeAudio,
-    playSFX, SOUNDS,
-    startMusic, stopMusic,
+    playSFX, playGrowl, SOUNDS,
+    startMusic, stopMusic, nextMusicTrack,
+    setMusicVolume, setSfxVolume, setMuted, toggleMute, getAudioSettings,
     setMasterVolume,
 };

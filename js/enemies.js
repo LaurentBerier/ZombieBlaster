@@ -7,6 +7,7 @@ import { scene, COLORS, NEON_PALETTE, createToonMaterial, addOutline } from './s
 import { PLAYER, getPlayerPosition } from './player.js';
 import { ARENA, ROOM_DEFS } from './arena.js';
 import { cloneAsset, getAssetAnimations } from './assetLoader.js';
+import { playGrowl } from './audio.js';
 
 // Target world-space height for the zombie GLB (in Three.js units).
 // Auto-fit scales the raw model bbox to this height so we don't hard-code
@@ -45,6 +46,11 @@ const STATUS_SPEED_MULT = {
 
 // Knockback decay per second (applied as ^dt each frame for frame-rate independence).
 const KNOCKBACK_DECAY = 0.0025; // ~0.82 per frame @60fps
+
+// Ambient growl scheduler — periodically a random living zombie growls so the
+// horde feels alive. Throttled globally (one growl per tick, randomized cadence)
+// to avoid a wall of noise when many enemies are active.
+let ambientGrowlTimer = 2.0;
 
 // Vertical extent of a zombie standing on the floor — used to skip walls
 // whose footprint is entirely above the enemy's head (eg ceiling beams).
@@ -462,10 +468,12 @@ function spawnEnemy(type, position) {
     enemy.impactFlashColor = null;
     resetTint(enemy);
 
-    // Per-enemy uniform scale jitter — ±5% around the type's base size, kept
-    // uniform across X/Y/Z so squash/stretch can't stretch them into balloons.
+    // Per-enemy uniform scale jitter, kept uniform across X/Y/Z so squash/stretch
+    // can't stretch them into balloons. Range is -10%..+15% around the type's base
+    // size, but cubing the random biases the distribution hard toward the small
+    // end — so the big (near +15%) zombies are really rare while most stay normal.
     // Bosses skip the jitter (they're meant to read as singular).
-    const sizeJitter = 0.95 + Math.random() * 0.1;
+    const sizeJitter = 0.9 + Math.pow(Math.random(), 3) * 0.25;
 
     // Configure by type
     switch (type) {
@@ -754,6 +762,13 @@ function updateEnemies(dt, onAttackPlayer, onStatusKill) {
                 // Attack animation - lunge forward
                 enemy.bodyGroup.scale.z = enemy.squashScale.z * 1.2;
                 enemy.bodyGroup.scale.x = enemy.squashScale.x * 0.85;
+
+                // Aggressive snarl on the lunge (occasional, so a packed melee
+                // ring doesn't drown the mix). Attacks happen point-blank, so
+                // these are loud — dist falloff barely trims them.
+                if (Math.random() < 0.5) {
+                    playGrowl({ aggressive: true, volume: Math.max(0.3, 1 - dist / 30) });
+                }
             }
         }
 
@@ -775,6 +790,25 @@ function updateEnemies(dt, onAttackPlayer, onStatusKill) {
         // wall resolve has the final say.
         resolveEnemyWallCollision(enemy);
     });
+
+    // Ambient horde growls — on a randomized cadence, one random living zombie
+    // growls. Closer zombies are louder. Denser hordes growl a touch more often
+    // (clamped) so the soundscape scales with the threat without ever spamming.
+    ambientGrowlTimer -= dt;
+    if (ambientGrowlTimer <= 0) {
+        const growlers = enemies.filter(e => e.alive && e.animState !== 'dying');
+        if (growlers.length > 0) {
+            const who = growlers[Math.floor(Math.random() * growlers.length)];
+            const dx = playerPos.x - who.root.position.x;
+            const dz = playerPos.z - who.root.position.z;
+            const dist = Math.sqrt(dx * dx + dz * dz);
+            playGrowl({ volume: Math.max(0.15, 1 - dist / 35) });
+        }
+        const cadence = growlers.length > 0
+            ? Math.max(0.8, 2.8 / Math.sqrt(growlers.length))
+            : 2.5;
+        ambientGrowlTimer = cadence * (0.7 + Math.random() * 0.6);
+    }
 }
 
 function damageEnemy(enemy, damage, opts = {}) {
@@ -952,6 +986,8 @@ function resetEnemies() {
     waveState.bossWave = false;
     waveState.bossSpawned = false;
     waveState.totalKills = 0;
+
+    ambientGrowlTimer = 2.0;
 }
 
 // World-space position of the enemy's head — anchor for HUD popups so the
