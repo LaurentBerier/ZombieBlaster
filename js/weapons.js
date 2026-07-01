@@ -7,8 +7,11 @@ import { scene, camera, COLORS, createToonMaterial, addOutline } from './scene.j
 import { ARENA } from './arena.js';
 import { PLAYER, keys, getPlayerForward, getPlayerPosition } from './player.js';
 import { weaponGroup } from './player.js';
-import { cloneAsset } from './assetLoader.js';
-import { spawnPlasmaTrail, spawnSmokeTrail, spawnChainLightning, spawnExplosion, spawnDropletTrail } from './effects.js';
+import { cloneAsset, getPreloadedTexture } from './assetLoader.js';
+import {
+    spawnPlasmaTrail, spawnSmokeTrail, spawnChainLightning, spawnExplosion,
+    spawnDropletTrail, spawnFrankenImpactDecal,
+} from './effects.js';
 import { playSFX } from './audio.js';
 
 const INFINITE_AMMO = true;
@@ -37,7 +40,7 @@ const WEAPON_DEFS = [
         projectileRadius: 0.18,
         spread: 0.02,
         color: COLORS.magenta,
-        projectileColor: COLORS.magenta,
+        projectileColor: COLORS.lime,
         fx: {
             element: 'shock',
             knockback: 3.0,
@@ -178,6 +181,24 @@ const weaponState = {
 // Projectile pool — sized for Soda stream (~16 concurrent) + rockets (~5) + plasma (~8) plus headroom.
 const projectiles = [];
 const MAX_PROJECTILES = 80;
+const FRANKEN_BULLET_SPRITE = {
+    url: 'assets/FX/LiquidSpriteSheet2.png',
+    columns: 3,
+    rows: 4,
+    frames: 12,
+    fps: 24,
+};
+let frankenBulletTexture = null;
+let frankenBulletCoreMaterial = null;
+let frankenBulletGlowMaterial = null;
+let frankenBulletAnimTime = 0;
+let frankenBulletFrame = -1;
+const _wallImpactNormal = new THREE.Vector3();
+const _wallImpactPoint = new THREE.Vector3();
+const _wallImpactSurface = { point: _wallImpactPoint, normal: _wallImpactNormal };
+const _projectilePrevPosition = new THREE.Vector3();
+const _groundImpactPoint = new THREE.Vector3();
+const _groundImpactNormal = new THREE.Vector3(0, 1, 0);
 
 // Beam visual
 let beamLine = null;
@@ -238,6 +259,7 @@ function initWeapons() {
     }
 
     // Projectile pool initialization
+    initFrankenBulletSpriteMaterials();
     for (let i = 0; i < MAX_PROJECTILES; i++) {
         const projRoot = new THREE.Group();
         const projGeo = new THREE.SphereGeometry(0.15, 8, 8);
@@ -250,6 +272,18 @@ function initWeapons() {
         const glowMat = new THREE.MeshBasicMaterial({ color: COLORS.orange, transparent: true, opacity: 0.3 });
         const glow = new THREE.Mesh(glowGeo, glowMat);
         projRoot.add(glow);
+
+        const frankenSprite = new THREE.Sprite(frankenBulletCoreMaterial);
+        frankenSprite.name = 'franken_bullet_sprite';
+        frankenSprite.visible = false;
+        frankenSprite.renderOrder = 8;
+        projRoot.add(frankenSprite);
+
+        const frankenGlow = new THREE.Sprite(frankenBulletGlowMaterial);
+        frankenGlow.name = 'franken_bullet_glow';
+        frankenGlow.visible = false;
+        frankenGlow.renderOrder = 7;
+        projRoot.add(frankenGlow);
 
         projRoot.visible = false;
         projRoot.userData = {
@@ -265,10 +299,70 @@ function initWeapons() {
             trail: null,
             trailTimer: 0,
             color: COLORS.orange,
+            coreMesh: projMesh,
+            glowMesh: glow,
+            frankenSprite,
+            frankenGlow,
+            spriteBullet: false,
+            spriteCoreBaseScale: 1,
+            spriteGlowBaseScale: 1,
         };
         scene.add(projRoot);
         projectiles.push(projRoot);
     }
+}
+
+function initFrankenBulletSpriteMaterials() {
+    if (frankenBulletCoreMaterial && frankenBulletGlowMaterial) return;
+
+    frankenBulletTexture = getPreloadedTexture('fx_franken_bullet')
+        || new THREE.TextureLoader().load(FRANKEN_BULLET_SPRITE.url);
+    frankenBulletTexture.wrapS = THREE.RepeatWrapping;
+    frankenBulletTexture.wrapT = THREE.RepeatWrapping;
+    frankenBulletTexture.repeat.set(1 / FRANKEN_BULLET_SPRITE.columns, 1 / FRANKEN_BULLET_SPRITE.rows);
+    frankenBulletTexture.minFilter = THREE.LinearFilter;
+    frankenBulletTexture.magFilter = THREE.LinearFilter;
+    frankenBulletTexture.generateMipmaps = false;
+    if (THREE.sRGBEncoding) frankenBulletTexture.encoding = THREE.sRGBEncoding;
+    setFrankenBulletSpriteFrame(0);
+
+    frankenBulletCoreMaterial = new THREE.SpriteMaterial({
+        map: frankenBulletTexture,
+        color: 0xffffff,
+        transparent: true,
+        opacity: 1.0,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false,
+    });
+    frankenBulletGlowMaterial = new THREE.SpriteMaterial({
+        map: frankenBulletTexture,
+        color: COLORS.lime,
+        transparent: true,
+        opacity: 0.45,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false,
+    });
+}
+
+function setFrankenBulletSpriteFrame(frame) {
+    if (!frankenBulletTexture) return;
+    const wrapped = frame % FRANKEN_BULLET_SPRITE.frames;
+    const col = wrapped % FRANKEN_BULLET_SPRITE.columns;
+    const row = Math.floor(wrapped / FRANKEN_BULLET_SPRITE.columns);
+    frankenBulletTexture.offset.set(
+        col / FRANKEN_BULLET_SPRITE.columns,
+        1 - ((row + 1) / FRANKEN_BULLET_SPRITE.rows)
+    );
+    frankenBulletFrame = wrapped;
+}
+
+function updateFrankenBulletSpriteAnimation(dt) {
+    if (!frankenBulletTexture) return;
+    frankenBulletAnimTime = (frankenBulletAnimTime + dt * FRANKEN_BULLET_SPRITE.fps) % FRANKEN_BULLET_SPRITE.frames;
+    const nextFrame = Math.floor(frankenBulletAnimTime);
+    if (nextFrame !== frankenBulletFrame) setFrankenBulletSpriteFrame(nextFrame);
 }
 
 function applyNeonAccentGlow(root) {
@@ -653,7 +747,7 @@ function performHitscan(origin, dir, evolution, weapon, enemies, onHitCallback) 
         const chainPoints = [origin.clone()];
 
         if (hitEnemy && hitPoint) {
-            onHitCallback(hitEnemy, hitPoint, evolution.damage, weaponState.currentIndex);
+            onHitCallback(hitEnemy, hitPoint, evolution.damage, weaponState.currentIndex, { impactDir: dir.clone() });
             chainPoints.push(hitPoint.clone());
 
             if (weapon.chainTargets && weapon.chainTargets > 0) {
@@ -667,7 +761,14 @@ function performHitscan(origin, dir, evolution, weapon, enemies, onHitCallback) 
                     enemyCenter.y = 1.0;
                     const dist = enemyCenter.distanceTo(lastPos);
                     if (dist < weapon.chainRadius) {
-                        onHitCallback(enemy, enemyCenter, evolution.damage * 0.6, weaponState.currentIndex);
+                        const chainDir = enemyCenter.clone().sub(lastPos).normalize();
+                        onHitCallback(
+                            enemy,
+                            enemyCenter,
+                            evolution.damage * 0.6,
+                            weaponState.currentIndex,
+                            { impactDir: chainDir }
+                        );
                         chainPoints.push(enemyCenter.clone());
                         lastPos = enemyCenter;
                         hitSet.add(enemy);
@@ -686,7 +787,7 @@ function performHitscan(origin, dir, evolution, weapon, enemies, onHitCallback) 
 
     // Fallback hitscan path (non-chain weapons, if any are ever re-introduced).
     if (hitEnemy && hitPoint) {
-        onHitCallback(hitEnemy, hitPoint, evolution.damage, weaponState.currentIndex);
+        onHitCallback(hitEnemy, hitPoint, evolution.damage, weaponState.currentIndex, { impactDir: dir.clone() });
     }
     const tracerEnd = hitPoint || origin.clone().add(dir.clone().multiplyScalar(60));
     spawnTracer(origin, tracerEnd, evolution.color);
@@ -725,27 +826,104 @@ function spawnProjectile(origin, dir, evolution, weapon) {
     proj.userData.trail = typeCfg.trail;
     proj.userData.trailInterval = typeCfg.trailInterval ?? 0.035;
     proj.userData.trailTimer = 0;
-    proj.userData.color = evolution.color;
+    proj.userData.color = weapon.projectileColor || evolution.color;
 
     proj.position.copy(origin).add(dir.clone().multiplyScalar(1));
+    proj.rotation.set(0, 0, 0);
     proj.visible = true;
-
-    // Color the projectile
-    proj.children[0].material.color.setHex(evolution.color);
-    proj.children[0].material.emissive.setHex(evolution.color);
-    proj.children[1].material.color.setHex(evolution.color);
 
     // Scale based on weapon
     const radius = weapon.projectileRadius || 0.15;
     const baseScale = radius / 0.15;
-    proj.children[0].scale.setScalar(baseScale);
-    proj.children[1].scale.setScalar(baseScale);
-    // Remember baseScale so blob core-pulse can modulate around it.
-    proj.children[0].userData.baseScale = baseScale;
-    proj.children[1].userData.baseScale = baseScale;
+    setProjectileVisual(proj, weapon, baseScale, radius);
+}
+
+function setProjectileVisual(proj, weapon, baseScale, radius) {
+    const isFrankenBullet = weaponState.currentIndex === 0 && weapon.projectileType === 'plasma';
+    const {
+        coreMesh, glowMesh, frankenSprite, frankenGlow,
+    } = proj.userData;
+
+    proj.userData.spriteBullet = isFrankenBullet;
+
+    if (isFrankenBullet) {
+        coreMesh.visible = false;
+        glowMesh.visible = false;
+        frankenSprite.visible = true;
+        frankenGlow.visible = true;
+
+        const spriteScale = Math.max(0.72, radius * 4.2);
+        const glowScale = spriteScale * 2.0;
+        frankenSprite.scale.set(spriteScale, spriteScale, 1);
+        frankenGlow.scale.set(glowScale, glowScale, 1);
+        proj.userData.spriteCoreBaseScale = spriteScale;
+        proj.userData.spriteGlowBaseScale = glowScale;
+        return;
+    }
+
+    frankenSprite.visible = false;
+    frankenGlow.visible = false;
+    coreMesh.visible = true;
+    glowMesh.visible = true;
+
+    coreMesh.material.color.setHex(proj.userData.color);
+    coreMesh.material.emissive.setHex(proj.userData.color);
+    glowMesh.material.color.setHex(proj.userData.color);
+
+    coreMesh.scale.setScalar(baseScale);
+    glowMesh.scale.setScalar(baseScale);
+    coreMesh.userData.baseScale = baseScale;
+    glowMesh.userData.baseScale = baseScale;
+}
+
+function clampValue(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+}
+
+function getWallImpactSurface(point, wall, targetPoint = _wallImpactPoint, targetNormal = _wallImpactNormal) {
+    let bestDistance = Infinity;
+    let nx = 0;
+    let ny = 0;
+    let nz = 1;
+    let axis = 'z';
+    let planeValue = wall.maxZ;
+
+    const testFace = (distance, x, y, z, faceAxis, facePlane) => {
+        if (distance >= bestDistance) return;
+        bestDistance = distance;
+        nx = x;
+        ny = y;
+        nz = z;
+        axis = faceAxis;
+        planeValue = facePlane;
+    };
+
+    testFace(Math.abs(point.x - wall.minX), -1, 0, 0, 'x', wall.minX);
+    testFace(Math.abs(point.x - wall.maxX), 1, 0, 0, 'x', wall.maxX);
+    testFace(Math.abs(point.z - wall.minZ), 0, 0, -1, 'z', wall.minZ);
+    testFace(Math.abs(point.z - wall.maxZ), 0, 0, 1, 'z', wall.maxZ);
+    if (wall.maxY !== undefined) {
+        testFace(Math.abs(point.y - wall.maxY), 0, 1, 0, 'y', wall.maxY);
+    }
+
+    targetPoint.set(
+        clampValue(point.x, wall.minX, wall.maxX),
+        clampValue(point.y, wall.minY ?? 0, wall.maxY ?? point.y),
+        clampValue(point.z, wall.minZ, wall.maxZ)
+    );
+    if (axis === 'x') targetPoint.x = planeValue;
+    else if (axis === 'y') targetPoint.y = planeValue;
+    else targetPoint.z = planeValue;
+
+    targetNormal.set(nx, ny, nz).normalize();
+    _wallImpactSurface.point = targetPoint;
+    _wallImpactSurface.normal = targetNormal;
+    return _wallImpactSurface;
 }
 
 function updateProjectiles(dt, enemies, onHitCallback) {
+    updateFrankenBulletSpriteAnimation(dt);
+
     projectiles.forEach(proj => {
         if (!proj.userData.active) return;
 
@@ -766,18 +944,24 @@ function updateProjectiles(dt, enemies, onHitCallback) {
         }
 
         // Move
-        proj.position.add(proj.userData.velocity.clone().multiplyScalar(dt));
+        _projectilePrevPosition.copy(proj.position);
+        proj.position.addScaledVector(proj.userData.velocity, dt);
 
         // Per-type visual flourish during flight.
         const pType = proj.userData.projectileType;
-        if (pType === 'liquid' || pType === 'blob') {
+        if (proj.userData.spriteBullet) {
+            const corePulse = 1 + Math.sin(proj.userData.lifetime * 36) * 0.08;
+            const glowPulse = 1 + Math.sin(proj.userData.lifetime * 22) * 0.14;
+            proj.userData.frankenSprite.scale.setScalar(proj.userData.spriteCoreBaseScale * corePulse);
+            proj.userData.frankenGlow.scale.setScalar(proj.userData.spriteGlowBaseScale * glowPulse);
+        } else if (pType === 'liquid' || pType === 'blob') {
             // Wobble: non-uniform scale pulse on the outer glow makes it read as a blob.
             const wobble = 0.9 + Math.sin(proj.userData.lifetime * 30) * 0.15;
-            proj.children[1].scale.set(wobble, 1 / wobble, wobble);
+            proj.userData.glowMesh.scale.set(wobble, 1 / wobble, wobble);
             // Big blob also pulses the inner core slightly so it looks alive.
             if (pType === 'blob') {
                 const core = 1.0 + Math.sin(proj.userData.lifetime * 22) * 0.08;
-                proj.children[0].scale.setScalar((proj.children[0].userData.baseScale || 2.0) * core);
+                proj.userData.coreMesh.scale.setScalar((proj.userData.coreMesh.userData.baseScale || 2.0) * core);
             }
         } else if (pType === 'rocket') {
             // Subtle roll only — ball keeps cartoon feel.
@@ -813,7 +997,9 @@ function updateProjectiles(dt, enemies, onHitCallback) {
             enemyCenter.y = 1.0; // Body center height
             const dist = proj.position.distanceTo(enemyCenter);
             if (dist < enemy.hitRadius + projRadius + 0.5) {
-                onHitCallback(enemy, proj.position.clone(), proj.userData.damage, proj.userData.weaponIndex);
+                onHitCallback(enemy, proj.position.clone(), proj.userData.damage, proj.userData.weaponIndex, {
+                    impactDir: proj.userData.velocity.clone().normalize(),
+                });
                 hit = true;
 
                 // AoE damage — secondary targets marked as splash to suppress redundant
@@ -840,16 +1026,45 @@ function updateProjectiles(dt, enemies, onHitCallback) {
             }
         });
 
+        let groundHit = false;
+        const groundY = 0.035;
+        if (!hit && proj.userData.velocity.y < -0.001 &&
+            _projectilePrevPosition.y > groundY && proj.position.y <= groundY) {
+            const denom = _projectilePrevPosition.y - proj.position.y;
+            const t = denom > 0.0001 ? (_projectilePrevPosition.y - groundY) / denom : 1;
+            _groundImpactPoint.lerpVectors(_projectilePrevPosition, proj.position, Math.max(0, Math.min(1, t)));
+            _groundImpactPoint.y = groundY;
+            groundHit = true;
+        }
+
+        if (groundHit && proj.userData.weaponIndex === 0) {
+            spawnFrankenImpactDecal(_groundImpactPoint, {
+                normal: _groundImpactNormal,
+                scale: 0.62,
+            });
+        }
+
         // Check collision with walls — rockets detonate on wall impact (explosion + AoE).
         let wallHit = false;
-        if (!hit) {
+        let hitWall = null;
+        if (!hit && !groundHit) {
             ARENA.walls.forEach(wall => {
                 if (wallHit) return;
                 if (proj.position.x > wall.minX && proj.position.x < wall.maxX &&
                     proj.position.z > wall.minZ && proj.position.z < wall.maxZ &&
+                    proj.position.y > (wall.minY ?? 0) &&
                     proj.position.y < wall.maxY) {
                     wallHit = true;
+                    hitWall = wall;
                 }
+            });
+        }
+
+        if (wallHit && hitWall && proj.userData.weaponIndex === 0) {
+            const impact = getWallImpactSurface(proj.position, hitWall);
+            spawnFrankenImpactDecal(impact.point, {
+                normal: impact.normal,
+                scale: 0.58,
             });
         }
 
@@ -857,7 +1072,7 @@ function updateProjectiles(dt, enemies, onHitCallback) {
             detonateProjectile(proj, enemies, onHitCallback);
         }
 
-        if (hit || wallHit) {
+        if (hit || wallHit || groundHit) {
             deactivateProjectile(proj);
         }
     });

@@ -18,7 +18,7 @@ body {
     background: #111111;
     font-family: 'Russo One', 'Arial Black', sans-serif;
     color: #FFFFFF;
-    cursor: none;
+    cursor: default;
 }
 
 canvas {
@@ -40,7 +40,7 @@ canvas {
     position: fixed;
     top: 0; left: 0;
     width: 100%; height: 100%;
-    background: linear-gradient(rgba(17,17,17,0.45), rgba(17,17,17,0.65)), url('../assets/Sandscape_Poster.jpg') center / cover no-repeat #111111;
+    background: linear-gradient(rgba(3,3,4,0.78), rgba(3,3,4,0.86)), url('../assets/Menu.png') center / cover no-repeat #111111;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -106,15 +106,47 @@ canvas {
     position: fixed;
     top: 0; left: 0;
     width: 100%; height: 100%;
-    background: linear-gradient(rgba(17,17,17,0.55), rgba(17,17,17,0.55)), url('../assets/Menu.png') center / cover no-repeat #111111;
+    background: linear-gradient(rgba(3,3,4,0.68), rgba(3,3,4,0.72)), url('../assets/Menu.png') center / cover no-repeat #111111;
     display: flex;
-    align-items: center;
+    align-items: stretch;
     justify-content: center;
     z-index: 900;
 }
 
 .title-content {
+    --title-top: clamp(56px, 13vh, 140px);
+    --subtitle-offset: 78px;
+    --tagline-offset: 126px;
+    --buttons-bottom: clamp(66px, 10vh, 118px);
+    --score-bottom: clamp(22px, 4vh, 46px);
+
+    position: relative;
+    width: 100%;
+    height: 100%;
     text-align: center;
+}
+
+#title-screen .game-title,
+#title-screen .game-subtitle,
+#title-screen .tagline,
+#title-screen .menu-buttons,
+#title-screen .high-score-display {
+    position: absolute;
+    left: 0;
+    right: 0;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+#title-screen .game-title {
+    top: var(--title-top);
+    line-height: 0.95;
+}
+
+#title-screen .game-subtitle {
+    top: calc(var(--title-top) + var(--subtitle-offset));
+    margin-top: 0;
+    line-height: 1;
 }
 
 .tagline {
@@ -123,6 +155,11 @@ canvas {
     color: #CCCCCC;
     margin-top: 16px;
     font-style: italic;
+}
+
+#title-screen .tagline {
+    top: calc(var(--title-top) + var(--tagline-offset));
+    margin-top: 0;
 }
 
 .glitch {
@@ -143,6 +180,11 @@ canvas {
     flex-direction: column;
     align-items: center;
     gap: 16px;
+}
+
+#title-screen .menu-buttons {
+    bottom: var(--buttons-bottom);
+    margin-top: 0;
 }
 
 .btn-primary, .btn-secondary {
@@ -193,10 +235,22 @@ canvas {
     box-shadow: 0 2px 0 #006666;
 }
 
+.btn-primary:disabled,
+.btn-secondary:disabled {
+    cursor: wait;
+    filter: saturate(0.65) brightness(0.75);
+    transform: none;
+}
+
 .high-score-display {
     margin-top: 32px;
     font-family: 'Press Start 2P', monospace;
     font-size: 14px;
+}
+
+#title-screen .high-score-display {
+    bottom: var(--score-bottom);
+    margin-top: 0;
 }
 
 .high-score-display .label {
@@ -206,6 +260,55 @@ canvas {
 .high-score-display .value {
     color: #FF1493;
     margin-left: 8px;
+}
+
+#screen-fade {
+    position: fixed;
+    inset: 0;
+    z-index: 2000;
+    background: #030304;
+    opacity: 1;
+    pointer-events: all;
+    transition: opacity 420ms ease;
+}
+
+@media (max-width: 700px), (max-height: 560px) {
+    #title-screen .title-content {
+        --title-top: 38px;
+        --subtitle-offset: 58px;
+        --tagline-offset: 96px;
+        --buttons-bottom: 38px;
+        --score-bottom: 12px;
+    }
+
+    #title-screen .game-title {
+        font-size: 54px;
+        letter-spacing: 3px;
+        -webkit-text-stroke-width: 1.5px;
+    }
+
+    #title-screen .game-subtitle {
+        font-size: 30px;
+    }
+
+    #title-screen .tagline {
+        font-size: 16px;
+    }
+
+    #title-screen .menu-buttons {
+        gap: 12px;
+    }
+
+    #title-screen .btn-primary,
+    #title-screen .btn-secondary {
+        min-width: 230px;
+        padding: 10px 34px;
+        font-size: 22px;
+    }
+
+    #title-screen .high-score-display {
+        font-size: 11px;
+    }
 }
 
 /* ============================================

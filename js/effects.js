@@ -4,6 +4,7 @@
 // ============================================
 
 import { scene, camera, COLORS, createToonMaterial } from './scene.js';
+import { getPreloadedTexture } from './assetLoader.js';
 
 // Comic-book popup pool (POW, ZAP, SPLAT, BOOM)
 const POPUP_TEXTS = ['POW!', 'ZAP!', 'SPLAT!', 'BOOM!', 'WHAM!', 'CRACK!'];
@@ -54,6 +55,186 @@ const MAX_ACID_POOLS = 10;
 // Chain lightning line segments pool
 const chainLightnings = [];
 const MAX_CHAIN_LIGHTNINGS = 6;
+
+// Franken-Gun impact stains on walls/characters. These are created on impact
+// and destroyed quickly so rapid fire cannot leave hundreds of transparent meshes.
+const frankenImpactDecals = [];
+const MAX_FRANKEN_IMPACT_DECALS = 18;
+const FRANKEN_DECAL_LIFETIME = 6.0;
+const FRANKEN_DECAL_FADE_TIME = 1.4;
+const FRANKEN_DECAL_TEXTURES = [
+    { id: 'fx_franken_decal_1', url: 'assets/FX/Blood_decal_1.png', aspect: 720 / 463 },
+    { id: 'fx_franken_decal_2', url: 'assets/FX/Blood_Decal_2.png', aspect: 500 / 463 },
+];
+let frankenDecalTextures = [];
+
+// Green blood impact atlas: 8 frames in a 4x2 sheet.
+const greenBloodImpacts = [];
+const MAX_GREEN_BLOOD_IMPACTS = 32;
+const GREEN_BLOOD_ATLAS = {
+    url: 'assets/FX/Green_Spill_juice_SpriteSheet3.png',
+    columns: 4,
+    rows: 2,
+    frames: 8,
+    fps: 18,
+};
+const GREEN_BLOOD_FRAME_SIZE = { width: 384, height: 256 };
+let greenBloodFrameTextures = [];
+
+const _decalForward = new THREE.Vector3(0, 0, 1);
+const _decalNormal = new THREE.Vector3();
+const _parentWorldQuaternion = new THREE.Quaternion();
+const _parentWorldScale = new THREE.Vector3();
+
+function configureTransparentTexture(texture) {
+    texture.wrapS = THREE.ClampToEdgeWrapping;
+    texture.wrapT = THREE.ClampToEdgeWrapping;
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.generateMipmaps = false;
+    if ('colorSpace' in texture && THREE.SRGBColorSpace) {
+        texture.colorSpace = THREE.SRGBColorSpace;
+    } else if ('encoding' in texture && THREE.sRGBEncoding) {
+        texture.encoding = THREE.sRGBEncoding;
+    }
+}
+
+function ensureFrankenDecalTextures() {
+    if (frankenDecalTextures.length > 0) return frankenDecalTextures;
+    const loader = new THREE.TextureLoader();
+    frankenDecalTextures = FRANKEN_DECAL_TEXTURES.map(def => {
+        const texture = getPreloadedTexture(def.id) || loader.load(def.url);
+        configureTransparentTexture(texture);
+        return { ...def, texture };
+    });
+    return frankenDecalTextures;
+}
+
+function createDownsampledFrameTexture(sourceTexture, atlas, frameIndex) {
+    const image = sourceTexture?.image;
+    const sourceWidth = image?.naturalWidth || image?.width || 0;
+    const sourceHeight = image?.naturalHeight || image?.height || 0;
+    if (!image || sourceWidth <= 0 || sourceHeight <= 0) return null;
+
+    const frameWidth = sourceWidth / atlas.columns;
+    const frameHeight = sourceHeight / atlas.rows;
+    const column = frameIndex % atlas.columns;
+    const row = Math.floor(frameIndex / atlas.columns);
+    const canvas = document.createElement('canvas');
+    canvas.width = GREEN_BLOOD_FRAME_SIZE.width;
+    canvas.height = GREEN_BLOOD_FRAME_SIZE.height;
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'medium';
+    ctx.drawImage(
+        image,
+        column * frameWidth,
+        row * frameHeight,
+        frameWidth,
+        frameHeight,
+        0,
+        0,
+        canvas.width,
+        canvas.height
+    );
+
+    const texture = new THREE.CanvasTexture(canvas);
+    configureTransparentTexture(texture);
+    texture.needsUpdate = true;
+    return texture;
+}
+
+function ensureGreenBloodFrameTextures() {
+    if (greenBloodFrameTextures.length > 0) return greenBloodFrameTextures;
+
+    const sourceTexture = getPreloadedTexture('fx_green_blood_impact')
+        || new THREE.TextureLoader().load(GREEN_BLOOD_ATLAS.url);
+    const frames = [];
+    for (let i = 0; i < GREEN_BLOOD_ATLAS.frames; i++) {
+        const texture = createDownsampledFrameTexture(sourceTexture, GREEN_BLOOD_ATLAS, i);
+        if (texture) frames.push(texture);
+    }
+
+    if (frames.length === GREEN_BLOOD_ATLAS.frames) {
+        greenBloodFrameTextures = frames;
+    } else {
+        configureTransparentTexture(sourceTexture);
+        greenBloodFrameTextures = [sourceTexture];
+    }
+
+    return greenBloodFrameTextures;
+}
+
+function resolveImpactNormal(position, normal) {
+    if (normal && normal.lengthSq() > 0.0001) {
+        _decalNormal.copy(normal);
+    } else {
+        _decalNormal.copy(camera.position).sub(position);
+    }
+    if (_decalNormal.lengthSq() < 0.0001) _decalNormal.set(0, 0, 1);
+    return _decalNormal.normalize();
+}
+
+function attachWorldSpaceDecal(mesh, parent, worldPosition, worldNormal, roll, surfaceOffset = 0.025) {
+    mesh.position.copy(worldPosition).addScaledVector(worldNormal, surfaceOffset);
+    mesh.quaternion.setFromUnitVectors(_decalForward, worldNormal);
+    mesh.rotateZ(roll);
+
+    if (!parent) {
+        scene.add(mesh);
+        return;
+    }
+
+    parent.updateWorldMatrix(true, false);
+    const worldQuaternion = mesh.quaternion.clone();
+    parent.worldToLocal(mesh.position);
+    parent.getWorldQuaternion(_parentWorldQuaternion).invert();
+    parent.getWorldScale(_parentWorldScale);
+    const inheritedScale = Math.max(
+        0.0001,
+        (_parentWorldScale.x + _parentWorldScale.y + _parentWorldScale.z) / 3
+    );
+    mesh.quaternion.copy(worldQuaternion).premultiply(_parentWorldQuaternion);
+    mesh.scale.setScalar(1 / inheritedScale);
+    parent.add(mesh);
+}
+
+function createGreenBloodImpactSprite() {
+    const frameTextures = ensureGreenBloodFrameTextures();
+
+    const material = new THREE.SpriteMaterial({
+        map: frameTextures[0] || null,
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false,
+    });
+    const sprite = new THREE.Sprite(material);
+    sprite.visible = false;
+    sprite.renderOrder = 9;
+    scene.add(sprite);
+
+    return {
+        sprite,
+        active: false,
+        age: 0,
+        lifetime: 0,
+        maxLifetime: GREEN_BLOOD_ATLAS.frames / GREEN_BLOOD_ATLAS.fps + 0.08,
+        baseScale: 1,
+        frame: -1,
+    };
+}
+
+function destroyFrankenImpactDecal(entry) {
+    if (!entry?.mesh) return;
+    if (entry.mesh.parent) entry.mesh.parent.remove(entry.mesh);
+    entry.mesh.geometry.dispose();
+    entry.mesh.material.dispose();
+    const idx = frankenImpactDecals.indexOf(entry);
+    if (idx !== -1) frankenImpactDecals.splice(idx, 1);
+}
 
 function initEffects() {
     // Create popup sprites using canvas textures
@@ -195,6 +376,11 @@ function initEffects() {
             maxLifetime: 0.5,
             velocity: new THREE.Vector3(),
         });
+    }
+
+    ensureFrankenDecalTextures();
+    for (let i = 0; i < MAX_GREEN_BLOOD_IMPACTS; i++) {
+        greenBloodImpacts.push(createGreenBloodImpactSprite());
     }
 
     // --- Acid pool (ground decal + pulsing glow) ---
@@ -388,6 +574,77 @@ function spawnHitParticles(position, color, count = 8) {
             (Math.random() - 0.5) * 8
         );
     }
+}
+
+function spawnGreenBloodImpact(position, options = {}) {
+    const entry = greenBloodImpacts.find(i => !i.active)
+        ?? greenBloodImpacts.reduce((oldest, current) => (
+            current.lifetime < oldest.lifetime ? current : oldest
+        ), greenBloodImpacts[0]);
+    if (!entry) return;
+
+    entry.active = true;
+    entry.age = 0;
+    entry.lifetime = entry.maxLifetime;
+    entry.baseScale = options.scale ?? (0.75 + Math.random() * 0.3);
+    entry.frame = -1;
+
+    const impactY = Math.max(position.y, 0.7);
+    entry.sprite.position.set(position.x, impactY + 0.05, position.z);
+    entry.sprite.material.opacity = options.opacity ?? 1.0;
+    entry.sprite.material.rotation = Math.random() * Math.PI * 2;
+    entry.sprite.material.map = greenBloodFrameTextures[0] || entry.sprite.material.map;
+    entry.sprite.scale.setScalar(entry.baseScale);
+    entry.sprite.visible = true;
+}
+
+function spawnFrankenImpactDecal(position, options = {}) {
+    const textures = ensureFrankenDecalTextures();
+    if (!position || textures.length === 0) return;
+
+    while (frankenImpactDecals.length >= MAX_FRANKEN_IMPACT_DECALS) {
+        destroyFrankenImpactDecal(frankenImpactDecals[0]);
+    }
+
+    const decalDef = textures[Math.floor(Math.random() * textures.length)];
+    const baseSize = options.scale ?? (0.5 + Math.random() * 0.16);
+    const height = baseSize * (0.88 + Math.random() * 0.22);
+    const width = height * decalDef.aspect;
+    const geometry = new THREE.PlaneGeometry(width, height);
+    const material = new THREE.MeshBasicMaterial({
+        map: decalDef.texture,
+        color: 0xffffff,
+        transparent: true,
+        opacity: options.opacity ?? 0.82,
+        alphaTest: 0.03,
+        depthTest: options.depthTest ?? true,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -1,
+    });
+    const decal = new THREE.Mesh(geometry, material);
+    decal.name = 'franken_impact_decal';
+    decal.renderOrder = 6;
+
+    const normal = resolveImpactNormal(position, options.normal);
+    attachWorldSpaceDecal(
+        decal,
+        options.parent,
+        position,
+        normal,
+        Math.random() * Math.PI * 2,
+        options.surfaceOffset ?? 0.025
+    );
+
+    const lifetime = options.lifetime ?? FRANKEN_DECAL_LIFETIME;
+    frankenImpactDecals.push({
+        mesh: decal,
+        lifetime,
+        maxLifetime: lifetime,
+        baseOpacity: material.opacity,
+    });
 }
 
 // Spawn death splat on floor
@@ -819,6 +1076,45 @@ function updateEffects(dt) {
         d.mesh.material.opacity = Math.min(0.95, t * 1.5);
     });
 
+    // Animated green blood impact sprites.
+    greenBloodImpacts.forEach(entry => {
+        if (!entry.active) return;
+        entry.age += dt;
+        entry.lifetime -= dt;
+        if (entry.lifetime <= 0) {
+            entry.active = false;
+            entry.sprite.visible = false;
+            return;
+        }
+
+        const frame = Math.min(
+            GREEN_BLOOD_ATLAS.frames - 1,
+            Math.floor(entry.age * GREEN_BLOOD_ATLAS.fps)
+        );
+        if (frame !== entry.frame) {
+            entry.frame = frame;
+            entry.sprite.material.map = greenBloodFrameTextures[frame] || greenBloodFrameTextures[0] || null;
+            entry.sprite.material.needsUpdate = true;
+        }
+
+        const t = entry.age / entry.maxLifetime;
+        entry.sprite.scale.setScalar(entry.baseScale * (1 + t * 0.45));
+        entry.sprite.material.opacity = Math.max(0, Math.min(1, (1 - t) * 1.35));
+        entry.sprite.position.y += dt * 0.18;
+    });
+
+    for (let i = frankenImpactDecals.length - 1; i >= 0; i--) {
+        const decal = frankenImpactDecals[i];
+        decal.lifetime -= dt;
+        if (decal.lifetime <= 0) {
+            destroyFrankenImpactDecal(decal);
+            continue;
+        }
+        if (decal.lifetime < FRANKEN_DECAL_FADE_TIME) {
+            decal.mesh.material.opacity = decal.baseOpacity * (decal.lifetime / FRANKEN_DECAL_FADE_TIME);
+        }
+    }
+
     // Acid pools (pulse + fade; tick damage handled elsewhere by querying getActiveAcidPools)
     acidPools.forEach(pool => {
         if (!pool.active) return;
@@ -867,6 +1163,10 @@ function resetEffects() {
     smokePuffs.forEach(s => { s.active = false; s.mesh.visible = false; });
     plasmaTrails.forEach(p => { p.active = false; p.mesh.visible = false; });
     liquidSplashes.forEach(d => { d.active = false; d.mesh.visible = false; });
+    greenBloodImpacts.forEach(g => { g.active = false; g.sprite.visible = false; });
+    while (frankenImpactDecals.length > 0) {
+        destroyFrankenImpactDecal(frankenImpactDecals[0]);
+    }
     acidPools.forEach(p => { p.active = false; p.mesh.visible = false; });
     chainLightnings.forEach(c => { c.active = false; c.lines.visible = false; });
     screenShake.amplitude = 0;
@@ -878,6 +1178,7 @@ function resetEffects() {
 export {
     initEffects, updateEffects,
     spawnPopup, spawnHitParticles, spawnDeathSplat,
+    spawnGreenBloodImpact, spawnFrankenImpactDecal,
     spawnDamageNumber, spawnExplosion, spawnSmokeTrail,
     spawnPlasmaTrail, spawnLiquidSplash, spawnDropletTrail,
     spawnAcidPool, getActiveAcidPools,

@@ -9,7 +9,7 @@
 </head>
 <body>
     <!-- Loading Screen -->
-    <div id="loading-screen">
+    <div id="loading-screen" class="hidden">
         <div class="loading-content">
             <h1 class="game-title">ZOMBIE BLASTER</h1>
             <h2 class="game-subtitle">UNDERGROUND MONSTERS</h2>
@@ -21,7 +21,7 @@
     </div>
 
     <!-- Title Screen -->
-    <div id="title-screen" class="hidden">
+    <div id="title-screen">
         <div class="title-content">
             <h1 class="game-title glitch">ZOMBIE BLASTER</h1>
             <h2 class="game-subtitle">UNDERGROUND MONSTERS</h2>
@@ -164,8 +164,8 @@
         </div>
     </div>
 
-    <!-- Three.js Canvas -->
-    <script src="js/lib/three.min.js"></script>
+    <div id="screen-fade" aria-hidden="true"></div>
+
     <script type="module" src="js/main.js"></script>
 </body>
 </html>

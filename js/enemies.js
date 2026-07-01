@@ -217,6 +217,7 @@ function applyGLBToEnemy(enemy) {
     enemy.deathClipDuration = 0;
     enemy.activeAnim = null;
     enemy.headBone = null;
+    enemy.impactBones = [];
 
     // Fit the raw model bbox to our target height so re-exported assets
     // with different source scales continue to render at the right size.
@@ -258,7 +259,12 @@ function applyGLBToEnemy(enemy) {
     // zombie pops out of view. Disable per-mesh culling on the whole tree —
     // the cost is negligible (zombies are already on-screen by definition once
     // they're chasing the player) and it kills the disappearing bug.
-    model.traverse(child => { child.frustumCulled = false; });
+    model.traverse(child => {
+        child.frustumCulled = false;
+        if (child.isBone && child.name !== 'Armature') {
+            enemy.impactBones.push(child);
+        }
+    });
 
     // Cache the "Head" bone (shared name across Zombie_1 and Zombie_2 skeletons)
     // so popups can anchor to the live world-space head position.
@@ -431,6 +437,7 @@ function createEnemyObject() {
         // track its world position as the animation plays. Null until applyGLBToEnemy
         // assigns it; bosses (no GLB) keep null and fall through to a procedural offset.
         headBone: null,
+        impactBones: [],
         // Skeletal animation state (set in applyGLBToEnemy when the GLB has clips).
         mixer: null,
         animAction: null,
@@ -460,6 +467,7 @@ function spawnEnemy(type, position) {
     enemy.squashScale.set(1, 1, 1);
     enemy.attackTimer = 0;
     enemy.useGLB = false;
+    enemy.impactBones = [];
     enemy.statusEffect.type = null;
     enemy.statusEffect.duration = 0;
     enemy.statusEffect.dpsTimer = 0;

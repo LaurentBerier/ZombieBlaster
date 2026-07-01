@@ -34,11 +34,16 @@ const ASSET_MANIFEST = {
     enemy_zombie_2:        { type: 'gltf', url: 'assets/Characters/Zombie_2/Zombie_2_Unsteady_Walk_withSkin.glb' },
     enemy_zombie_2_attack: { type: 'gltf', url: 'assets/Characters/Zombie_2/Zombie_2__Charged_1.glb' },
     enemy_zombie_2_death:  { type: 'gltf', url: 'assets/Characters/Zombie_2/Zombie_2__Dead.glb' },
+    fx_franken_bullet:     { type: 'texture', url: 'assets/FX/LiquidSpriteSheet2.png' },
+    fx_franken_decal_1:    { type: 'texture', url: 'assets/FX/Blood_decal_1.png' },
+    fx_franken_decal_2:    { type: 'texture', url: 'assets/FX/Blood_Decal_2.png' },
+    fx_green_blood_impact: { type: 'texture', url: 'assets/FX/Green_Spill_juice_SpriteSheet3.png' },
 };
 
 // Loaded and standardized entries, keyed by asset id.
 // Each entry: { scene, animations: THREE.AnimationClip[], skinned: boolean }
 const assetCache = new Map();
+const textureCache = new Map();
 
 // Apply shadow casting/receiving to every mesh in the scene graph.
 // Called once per loaded asset before it enters the cache.
@@ -63,12 +68,12 @@ function friendlyName(url) {
 }
 
 /**
- * Preload GLB assets (plus any 'object'-type extras). Returns a Promise that
+ * Preload GLB/assets (plus any 'object'-type extras). Returns a Promise that
  * resolves when every load has either succeeded or failed (never rejects —
  * missing assets fall back to placeholder geometry in their respective modules).
  *
  * @param {object} [options]
- * @param {Array<{id?: string, url: string, type?: 'gltf'|'object'}>} [options.extras]
+ * @param {Array<{id?: string, url: string, type?: 'gltf'|'object'|'texture'}>} [options.extras]
  *   Additional asset descriptors to load alongside the manifest. Used for
  *   designer-imported custom props discovered in level data at boot time.
  *   If `id` is omitted, the URL is used as the cache key.
@@ -111,6 +116,7 @@ export function preloadAssets({ extras = [], onProgress } = {}) {
 
     const loader = createGLTFLoader();
     const objectLoader = new THREE.ObjectLoader();
+    const textureLoader = new THREE.TextureLoader();
 
     // Per-entry state for aggregated byte-progress display.
     const states = entries.map(e => ({
@@ -181,6 +187,23 @@ export function preloadAssets({ extras = [], onProgress } = {}) {
             return;
         }
 
+        if (s.type === 'texture') {
+            textureLoader.load(
+                s.url,
+                texture => {
+                    textureCache.set(s.id, { texture, url: s.url });
+                    textureCache.set(s.url, { texture, url: s.url });
+                    finish();
+                },
+                handleProgress,
+                err => {
+                    console.warn(`[AssetLoader] Failed to load "${s.id}" (${s.url}):`, err?.message ?? err);
+                    finish();
+                }
+            );
+            return;
+        }
+
         fetch(s.url)
             .then(resp => {
                 if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -239,6 +262,10 @@ export function cloneAsset(id) {
 export function getAssetAnimations(id) {
     const entry = assetCache.get(id);
     return entry ? entry.animations : [];
+}
+
+export function getPreloadedTexture(idOrUrl) {
+    return textureCache.get(idOrUrl)?.texture ?? null;
 }
 
 /**

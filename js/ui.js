@@ -3,13 +3,49 @@
 // HUD updates, screen transitions, announcements
 // ============================================
 
-import { PLAYER } from './player.js';
-import { weaponState, WEAPON_DEFS, getCurrentWeapon, getCurrentEvolution } from './weapons.js';
-import { scoreState } from './gameLogic.js';
-import { waveState } from './enemies.js';
-
 // Cache DOM elements
 let elements = {};
+let gameRefs = {
+    PLAYER: null,
+    weaponState: null,
+    WEAPON_DEFS: [],
+    getCurrentEvolution: null,
+    scoreState: null,
+    waveState: null,
+};
+
+const HIGH_SCORE_KEY = 'zombieBlasterHighScore';
+const DEFAULT_SCORE_STATE = {
+    score: 0,
+    highScore: 0,
+    comboMultiplier: 1,
+    maxComboMultiplier: 1,
+    totalKills: 0,
+};
+const DEFAULT_WAVE_STATE = { currentWave: 1 };
+
+function readStoredHighScore() {
+    try {
+        return parseInt(localStorage.getItem(HIGH_SCORE_KEY) || '0', 10);
+    } catch (e) {
+        return 0;
+    }
+}
+
+function getScoreState() {
+    if (gameRefs.scoreState) return gameRefs.scoreState;
+    DEFAULT_SCORE_STATE.highScore = readStoredHighScore();
+    return DEFAULT_SCORE_STATE;
+}
+
+function getWaveState() {
+    return gameRefs.waveState || DEFAULT_WAVE_STATE;
+}
+
+function setGameRefs(refs) {
+    gameRefs = { ...gameRefs, ...refs };
+    buildWeaponSlots();
+}
 
 function initUI() {
     elements = {
@@ -31,6 +67,7 @@ function initUI() {
         titleScreen: document.getElementById('title-screen'),
         controlsOverlay: document.getElementById('controls-overlay'),
         settingsOverlay: document.getElementById('settings-overlay'),
+        screenFade: document.getElementById('screen-fade'),
         hud: document.getElementById('hud'),
         pauseScreen: document.getElementById('pause-screen'),
         gameoverScreen: document.getElementById('gameover-screen'),
@@ -66,14 +103,14 @@ function initUI() {
         loadingBar: document.getElementById('loading-bar'),
         loadingText: document.getElementById('loading-text'),
     };
-
-    // Build weapon slots
-    buildWeaponSlots();
 }
 
 function buildWeaponSlots() {
     if (!elements.weaponSlots) return;
     elements.weaponSlots.innerHTML = '';
+    if (!gameRefs.WEAPON_DEFS?.length) return;
+
+    const { WEAPON_DEFS } = gameRefs;
     WEAPON_DEFS.forEach((def, i) => {
         const slot = document.createElement('div');
         slot.className = 'weapon-slot' + (i === 0 ? ' active' : '');
@@ -85,6 +122,10 @@ function buildWeaponSlots() {
 
 function updateHUD() {
     if (!elements.score) return;
+    const { PLAYER, weaponState, getCurrentEvolution } = gameRefs;
+    const scoreState = getScoreState();
+    const waveState = getWaveState();
+    if (!PLAYER || !weaponState || !getCurrentEvolution) return;
 
     // Score (animated counting)
     elements.score.textContent = scoreState.score.toLocaleString();
@@ -167,6 +208,7 @@ function announceBoss() {
 
 function showWeaponSwitch(index) {
     if (!elements.weaponSwitchIndicator) return;
+    if (!elements.weaponSlots) return;
 
     // Update active slot
     const slots = elements.weaponSlots.children;
@@ -187,6 +229,9 @@ function showWeaponSwitch(index) {
 
 // Screen management
 function showScreen(screenName) {
+    const scoreState = getScoreState();
+    const waveState = getWaveState();
+
     // Hide all
     ['loadingScreen', 'titleScreen', 'controlsOverlay', 'settingsOverlay', 'hud', 'pauseScreen', 'gameoverScreen'].forEach(key => {
         if (elements[key]) elements[key].classList.add('hidden');
@@ -227,6 +272,19 @@ function showScreen(screenName) {
     }
 }
 
+function showSettingsOverlay() {
+    if (elements.settingsOverlay) {
+        elements.settingsOverlay.classList.remove('hidden');
+        document.body.style.cursor = 'default';
+    }
+}
+
+function hideSettingsOverlay() {
+    if (elements.settingsOverlay) {
+        elements.settingsOverlay.classList.add('hidden');
+    }
+}
+
 function showNewHighScore(isNew) {
     if (elements.newHighScore) {
         if (isNew) {
@@ -246,10 +304,54 @@ function updateLoadingBar(progress, text) {
     }
 }
 
+function fadeTo(opacity, duration = 420) {
+    if (!elements.screenFade) return Promise.resolve();
+
+    const fade = elements.screenFade;
+    fade.style.transitionDuration = `${duration}ms`;
+    fade.style.pointerEvents = 'all';
+
+    return new Promise(resolve => {
+        let done = false;
+        const finish = () => {
+            if (done) return;
+            done = true;
+            fade.removeEventListener('transitionend', onTransitionEnd);
+            if (opacity === 0) fade.style.pointerEvents = 'none';
+            resolve();
+        };
+        const onTransitionEnd = (event) => {
+            if (event.target === fade && event.propertyName === 'opacity') finish();
+        };
+
+        fade.addEventListener('transitionend', onTransitionEnd);
+        requestAnimationFrame(() => {
+            fade.style.opacity = String(opacity);
+        });
+        setTimeout(finish, duration + 80);
+    });
+}
+
+function fadeIn(duration) {
+    return fadeTo(0, duration);
+}
+
+function fadeOut(duration) {
+    return fadeTo(1, duration);
+}
+
+async function transitionToScreen(screenName, { outDuration = 320, inDuration = 420 } = {}) {
+    await fadeOut(outDuration);
+    showScreen(screenName);
+    await fadeIn(inDuration);
+}
+
 export {
-    initUI, updateHUD, bumpCombo,
+    initUI, setGameRefs, updateHUD, bumpCombo,
     announceWave, announceBoss,
     showWeaponSwitch, showScreen,
+    showSettingsOverlay, hideSettingsOverlay,
     showNewHighScore, updateLoadingBar,
+    fadeIn, fadeOut, transitionToScreen,
     elements,
 };

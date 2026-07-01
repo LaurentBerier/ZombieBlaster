@@ -123,7 +123,12 @@ function initPlayer() {
 function requestPointerLock() {
     const canvas = document.querySelector('canvas');
     if (canvas) {
-        try { canvas.requestPointerLock(); } catch (e) { /* Requires user gesture */ }
+        try {
+            const lockRequest = canvas.requestPointerLock();
+            if (lockRequest?.catch) lockRequest.catch(() => {});
+        } catch (e) {
+            // Requires a valid user gesture in some browsers.
+        }
     }
 }
 

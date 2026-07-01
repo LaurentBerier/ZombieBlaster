@@ -1,110 +1,308 @@
 // ============================================
 // ZOMBIE BLASTER: UNDERGROUND MONSTERS
-// Main Game Module - Initialization & Game Loop
+// Main Game Module - Menu Boot, Lazy Loading & Game Loop
 // ============================================
 
-import { scene, camera, renderer, clock, initScene } from './scene.js';
-import { buildArena, loadLevelData, collectCustomPropAssets, ARENA } from './arena.js';
 import {
-    PLAYER, keys, initPlayer, updatePlayer, damagePlayer, resetPlayer,
-    requestPointerLock, exitPointerLock, getPlayerForward,
-} from './player.js';
-import {
-    WEAPON_DEFS, weaponState, initWeapons, updateWeapons,
-    switchWeapon, resetWeapons,
-} from './weapons.js';
-import {
-    enemies, waveState, initEnemies, updateEnemies, updateWaves,
-    damageEnemy, getAliveEnemies, resetEnemies, getEnemyHeadWorldPos,
-} from './enemies.js';
-import {
-    scoreState, initGameLogic, addKill, updateCombo, onPlayerDamaged,
-    saveHighScore, updateTraps, resetGameLogic,
-} from './gameLogic.js';
-import {
-    initEffects, updateEffects, spawnPopup, spawnHitParticles,
-    spawnDeathSplat, spawnDamageNumber, spawnExplosion,
-    spawnLiquidSplash, spawnAcidPool, getActiveAcidPools,
-    triggerScreenShake, updateScreenShake, getScreenShakeOffset,
-    showHitMarker, resetEffects,
-} from './effects.js';
-import {
-    initAudio, resumeAudio, playSFX, startMusic, stopMusic, nextMusicTrack,
-    setMusicVolume, setSfxVolume, setMuted, getAudioSettings,
-} from './audio.js';
-import {
-    initUI, updateHUD, bumpCombo, announceWave, announceBoss,
-    showWeaponSwitch, showScreen, showNewHighScore, updateLoadingBar,
+    initUI, setGameRefs, updateHUD, bumpCombo, announceWave, announceBoss,
+    showWeaponSwitch, showScreen, showSettingsOverlay, hideSettingsOverlay,
+    showNewHighScore, updateLoadingBar, fadeIn, fadeOut, transitionToScreen,
 } from './ui.js';
-import { preloadAssets } from './assetLoader.js';
-
-// Scratch vector reused each frame — avoid per-call allocations in hot path.
-const _scratchDir = new THREE.Vector3();
-const _scratchHeadPos = new THREE.Vector3();
 
 // Game states
 const GAME_STATES = {
-    LOADING: 'loading',
     TITLE: 'title',
+    LOADING: 'loading',
     PLAYING: 'playing',
     PAUSED: 'paused',
     GAME_OVER: 'gameover',
 };
 
-let gameState = GAME_STATES.LOADING;
+let gameState = GAME_STATES.TITLE;
 let frameCount = 0;
+let transitionBusy = false;
+
+let gameReady = false;
+let gameLoadPromise = null;
+let gameLoopStarted = false;
+let threeLoadPromise = null;
+let audioModulePromise = null;
+let audioApi = null;
+
+// Gameplay module references, filled only after the user starts a game.
+let scene, camera, renderer, clock;
+let buildArena, loadLevelData, collectCustomPropAssets;
+let PLAYER, initPlayer, updatePlayer, damagePlayer, resetPlayer;
+let requestPointerLock, exitPointerLock, getPlayerForward;
+let WEAPON_DEFS, weaponState, initWeapons, updateWeapons, switchWeapon, resetWeapons;
+let enemies, waveState, initEnemies, updateEnemies, updateWaves;
+let damageEnemy, getAliveEnemies, resetEnemies, getEnemyHeadWorldPos;
+let scoreState, initGameLogic, addKill, updateCombo, onPlayerDamaged;
+let saveHighScore, updateTraps, resetGameLogic;
+let initEffects, updateEffects, spawnPopup, spawnHitParticles;
+let spawnDeathSplat, spawnGreenBloodImpact, spawnFrankenImpactDecal;
+let spawnDamageNumber, spawnExplosion, spawnLiquidSplash;
+let spawnAcidPool, getActiveAcidPools, triggerScreenShake, updateScreenShake;
+let getScreenShakeOffset, showHitMarker, resetEffects;
+let preloadAssets;
+let _scratchDir, _scratchHeadPos, _scratchImpactNormal, _scratchImpactBonePos;
+let _scratchImpactDir, _scratchImpactOrigin, _scratchVisualHitPoint, _scratchFaceNormal;
+let _impactNormalMatrix, _impactRaycaster, _impactRayHits, _impactRay;
+let _impactTriA, _impactTriB, _impactTriC, _impactHitPoint, _impactTriangle;
+let _impactClosestPoint, _impactSurfaceNormal;
+let _projectedImpact;
+
+let weaponSwitchInputBound = false;
+let canvasPointerLockBound = false;
 
 // ---- INITIALIZATION ----
 
-async function init() {
-    // Init UI first so screen management works
+function init() {
     initUI();
-    showScreen('loading');
-    updateLoadingBar(0, 'INITIALIZING...');
+    setupMenuHandlers();
+    showScreen('title');
+    fadeIn(560);
+}
 
-    // Arm music autostart immediately so the entire loading screen is covered:
-    // the first click/keypress at any point — during loading or on the menu —
-    // starts the soundtrack the moment the browser's autoplay gate opens.
-    armMusicAutostart();
-    // Also attempt playback right now, during loading. On visits where the
-    // browser already permits autoplay (its per-site engagement heuristic) this
-    // starts the music with no click; on a fresh visit it's blocked and the
-    // armed listener above starts it on the first interaction instead.
-    ensureMusicStarted();
+function delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
 
-    // Small delay so the first paint reaches the screen before we start work
-    await delay(50);
+function setButtonsDisabled(disabled) {
+    document.querySelectorAll('button').forEach(button => {
+        button.disabled = disabled;
+    });
+}
 
-    // ---- Phase 1: renderer + scene graph (3%) ----
+async function runExclusive(work) {
+    if (transitionBusy) return;
+    transitionBusy = true;
+    setButtonsDisabled(true);
     try {
-        initScene();
+        await work();
+    } finally {
+        setButtonsDisabled(false);
+        transitionBusy = false;
+    }
+}
+
+// ---- LIGHTWEIGHT MENU HANDLERS ----
+
+function setupMenuHandlers() {
+    document.getElementById('btn-start').addEventListener('click', () => {
+        runExclusive(beginStartGame);
+    });
+    document.getElementById('btn-controls').addEventListener('click', () => {
+        runExclusive(() => transitionToScreen('controls'));
+    });
+    document.getElementById('btn-close-controls').addEventListener('click', () => {
+        runExclusive(() => transitionToScreen('title'));
+    });
+
+    document.getElementById('btn-resume').addEventListener('click', () => {
+        runExclusive(resumeGame);
+    });
+    document.getElementById('btn-quit').addEventListener('click', () => {
+        runExclusive(quitToMenu);
+    });
+
+    document.getElementById('btn-retry').addEventListener('click', () => {
+        runExclusive(beginStartGame);
+    });
+    document.getElementById('btn-menu').addEventListener('click', () => {
+        runExclusive(quitToMenu);
+    });
+
+    setupSettingsHandlers();
+
+    document.addEventListener('keydown', (e) => {
+        if (e.code !== 'Escape') return;
+        if (gameState === GAME_STATES.PLAYING) {
+            if (!document.pointerLockElement) pauseGame();
+        } else if (gameState === GAME_STATES.PAUSED) {
+            runExclusive(resumeGame);
+        }
+    });
+
+    document.addEventListener('pointerlockchange', () => {
+        if (!document.pointerLockElement && gameState === GAME_STATES.PLAYING) {
+            pauseGame();
+        }
+    });
+}
+
+function setupSettingsHandlers() {
+    const muteEl = document.getElementById('set-mute');
+    const musicEl = document.getElementById('set-music');
+    const sfxEl = document.getElementById('set-sfx');
+    const musicVal = document.getElementById('set-music-val');
+    const sfxVal = document.getElementById('set-sfx-val');
+
+    async function syncControls() {
+        const audio = await loadAudioModule();
+        audio.initAudio();
+        audio.resumeAudio();
+        const settings = audio.getAudioSettings();
+        muteEl.checked = settings.muted;
+        musicEl.value = Math.round(settings.musicVolume * 100);
+        sfxEl.value = Math.round(settings.sfxVolume * 100);
+        musicVal.textContent = musicEl.value + '%';
+        sfxVal.textContent = sfxEl.value + '%';
+    }
+
+    async function openSettings() {
+        await fadeOut(260);
+        await syncControls();
+        showSettingsOverlay();
+        await fadeIn(360);
+    }
+
+    async function closeSettings() {
+        await fadeOut(260);
+        hideSettingsOverlay();
+        await fadeIn(360);
+    }
+
+    musicEl.addEventListener('input', async () => {
+        const audio = await loadAudioModule();
+        audio.setMusicVolume(musicEl.value / 100);
+        musicVal.textContent = musicEl.value + '%';
+    });
+    sfxEl.addEventListener('input', async () => {
+        const audio = await loadAudioModule();
+        audio.initAudio();
+        audio.resumeAudio();
+        audio.setSfxVolume(sfxEl.value / 100);
+        sfxVal.textContent = sfxEl.value + '%';
+        audio.playSFX('weapon_switch');
+    });
+    muteEl.addEventListener('change', async () => {
+        const audio = await loadAudioModule();
+        audio.setMuted(muteEl.checked);
+    });
+
+    document.getElementById('btn-settings').addEventListener('click', () => {
+        runExclusive(openSettings);
+    });
+    document.getElementById('btn-settings-pause').addEventListener('click', () => {
+        runExclusive(openSettings);
+    });
+    document.getElementById('btn-close-settings').addEventListener('click', () => {
+        runExclusive(closeSettings);
+    });
+}
+
+async function loadAudioModule() {
+    if (!audioModulePromise) {
+        audioModulePromise = import('./audio.js');
+    }
+    audioApi = await audioModulePromise;
+    return audioApi;
+}
+
+function playSFXSafe(soundName) {
+    if (audioApi) audioApi.playSFX(soundName);
+}
+
+// ---- LAZY GAME LOAD ----
+
+async function beginStartGame() {
+    const needsLoading = !gameReady;
+
+    await fadeOut(320);
+    if (needsLoading) {
+        gameState = GAME_STATES.LOADING;
+        updateLoadingBar(0, 'STARTING THE SILO...');
+        showScreen('loading');
+        await fadeIn(420);
+
+        try {
+            await ensureGameReady();
+        } catch (err) {
+            console.error('Game initialization failed:', err);
+            updateLoadingBar(0, 'ERROR: ' + err.message);
+            const loadingText = document.getElementById('loading-text');
+            if (loadingText) loadingText.style.color = '#FF3B30';
+            await fadeIn(240);
+            return;
+        }
+
+        await fadeOut(320);
+    }
+
+    startGame();
+    await fadeIn(520);
+}
+
+function ensureGameReady() {
+    if (gameReady) return Promise.resolve();
+    if (!gameLoadPromise) {
+        gameLoadPromise = loadGameRuntime();
+    }
+    return gameLoadPromise;
+}
+
+async function loadGameRuntime() {
+    updateLoadingBar(1, 'LOADING ENGINE...');
+    await loadThreeScript();
+
+    updateLoadingBar(3, 'LOADING GAME CODE...');
+    const [
+        sceneModule,
+        arenaModule,
+        playerModule,
+        weaponsModule,
+        enemiesModule,
+        gameLogicModule,
+        effectsModule,
+        assetLoaderModule,
+        audioModule,
+    ] = await Promise.all([
+        import('./scene.js'),
+        import('./arena.js'),
+        import('./player.js'),
+        import('./weapons.js'),
+        import('./enemies.js'),
+        import('./gameLogic.js'),
+        import('./effects.js'),
+        import('./assetLoader.js'),
+        loadAudioModule(),
+    ]);
+
+    wireGameModules({
+        sceneModule,
+        arenaModule,
+        playerModule,
+        weaponsModule,
+        enemiesModule,
+        gameLogicModule,
+        effectsModule,
+        assetLoaderModule,
+        audioModule,
+    });
+
+    updateLoadingBar(5, 'INITIALIZING RENDERER...');
+    try {
+        sceneModule.initScene();
+        ({ scene, camera, renderer, clock } = sceneModule);
+        setupCanvasPointerLock();
     } catch (sceneErr) {
         updateLoadingBar(0, 'ERROR: ' + sceneErr.message);
         throw sceneErr;
     }
-    updateLoadingBar(3, 'READING LEVEL DATA...');
 
-    // ---- Phase 2: level data (3% -> 7%) ----
-    // Fetched up front so the asset loader can include the level's
-    // designer-imported custom-prop GLBs in its preload pass.
+    updateLoadingBar(7, 'READING LEVEL DATA...');
     const levelData = await loadLevelData();
     const customPropAssets = collectCustomPropAssets(levelData);
-    updateLoadingBar(7, 'GATHERING ASSETS...');
+    updateLoadingBar(9, 'GATHERING ASSETS...');
 
-    // ---- Phase 3: preload every GLB (7% -> 85%) ----
-    // The bar within this phase is driven by per-file load events, and the
-    // text line shows the current file, the N-of-M count, and byte progress
-    // when the server reports Content-Length.
-    const ASSET_BAR_START = 7;
-    const ASSET_BAR_SPAN = 78;
+    const ASSET_BAR_START = 9;
+    const ASSET_BAR_SPAN = 76;
     await preloadAssets({
         extras: customPropAssets,
         onProgress: ({ done, total, currentName, bytesLoaded, bytesTotal }) => {
-            // Weight done-files plus in-flight byte progress, so the bar
-            // advances smoothly even while large GLBs stream in.
             const bytesFraction = bytesTotal > 0 ? (bytesLoaded / bytesTotal) : 0;
             const fileFraction = total > 0 ? (done / total) : 1;
-            // 70% of the phase tracks completed files, 30% tracks bytes in flight.
             const blended = total === 0
                 ? 1
                 : Math.min(1, fileFraction * 0.7 + bytesFraction * 0.3);
@@ -112,9 +310,8 @@ async function init() {
             updateLoadingBar(pct, formatAssetProgress(currentName, done, total, bytesLoaded, bytesTotal));
         },
     });
-    updateLoadingBar(ASSET_BAR_START + ASSET_BAR_SPAN, 'BUILDING THE SILO...');
+    updateLoadingBar(85, 'BUILDING THE SILO...');
 
-    // ---- Phase 4: build arena from cached assets (fully synchronous now) ----
     await buildArena(levelData);
     updateLoadingBar(89, 'WAKING THE DEAD...');
 
@@ -133,53 +330,140 @@ async function init() {
     initEffects();
     updateLoadingBar(99, 'TUNING AUDIO...');
 
-    initAudio();
+    audioApi.initAudio();
     updateLoadingBar(100, 'READY!');
 
-    // Setup input handlers for menus
-    setupMenuHandlers();
-
-    // Setup weapon switch keys
     setupWeaponSwitchInput();
-
-    // Short delay so the user sees the "READY!" state, then show title
-    await delay(500);
-    gameState = GAME_STATES.TITLE;
-    showScreen('title');
-
-    // Try to start the soundtrack as the menu appears. This succeeds with no
-    // click on revisits where the browser has granted engagement-based autoplay;
-    // on a fresh visit it's blocked, and the listener armed at init() start will
-    // kick it off on the user's first interaction instead.
-    ensureMusicStarted();
-
-    // Start game loop
-    requestAnimationFrame(gameLoop);
+    gameReady = true;
+    startGameLoop();
+    await delay(240);
 }
 
-// Kick off the soundtrack as early as the browser allows.
-function ensureMusicStarted() {
-    resumeAudio();
-    startMusic();
+function loadThreeScript() {
+    if (window.THREE) return Promise.resolve();
+    if (threeLoadPromise) return threeLoadPromise;
+
+    threeLoadPromise = new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = 'js/lib/three.min.js';
+        script.async = true;
+        script.onload = () => resolve();
+        script.onerror = () => reject(new Error('Could not load Three.js'));
+        document.head.appendChild(script);
+    });
+
+    return threeLoadPromise;
 }
 
-let musicAutostartArmed = false;
-function armMusicAutostart() {
-    if (musicAutostartArmed) return;
-    musicAutostartArmed = true;
-    const kick = () => {
-        ensureMusicStarted();
-        window.removeEventListener('pointerdown', kick);
-        window.removeEventListener('keydown', kick);
+function wireGameModules(modules) {
+    const {
+        sceneModule, arenaModule, playerModule, weaponsModule, enemiesModule,
+        gameLogicModule, effectsModule, assetLoaderModule,
+    } = modules;
+
+    ({ scene, camera, renderer, clock } = sceneModule);
+    ({ buildArena, loadLevelData, collectCustomPropAssets } = arenaModule);
+    ({
+        PLAYER, initPlayer, updatePlayer, damagePlayer, resetPlayer,
+        requestPointerLock, exitPointerLock, getPlayerForward,
+    } = playerModule);
+    ({
+        WEAPON_DEFS, weaponState, initWeapons, updateWeapons,
+        switchWeapon, resetWeapons,
+    } = weaponsModule);
+    ({
+        enemies, waveState, initEnemies, updateEnemies, updateWaves,
+        damageEnemy, getAliveEnemies, resetEnemies, getEnemyHeadWorldPos,
+    } = enemiesModule);
+    ({
+        scoreState, initGameLogic, addKill, updateCombo, onPlayerDamaged,
+        saveHighScore, updateTraps, resetGameLogic,
+    } = gameLogicModule);
+    ({
+        initEffects, updateEffects, spawnPopup, spawnHitParticles,
+        spawnDeathSplat, spawnGreenBloodImpact, spawnFrankenImpactDecal,
+        spawnDamageNumber, spawnExplosion, spawnLiquidSplash,
+        spawnAcidPool, getActiveAcidPools, triggerScreenShake, updateScreenShake,
+        getScreenShakeOffset, showHitMarker, resetEffects,
+    } = effectsModule);
+    ({ preloadAssets } = assetLoaderModule);
+
+    _scratchDir = new THREE.Vector3();
+    _scratchHeadPos = new THREE.Vector3();
+    _scratchImpactNormal = new THREE.Vector3();
+    _scratchImpactBonePos = new THREE.Vector3();
+    _scratchImpactDir = new THREE.Vector3();
+    _scratchImpactOrigin = new THREE.Vector3();
+    _scratchVisualHitPoint = new THREE.Vector3();
+    _scratchFaceNormal = new THREE.Vector3();
+    _impactNormalMatrix = new THREE.Matrix3();
+    _impactRaycaster = new THREE.Raycaster();
+    _impactRayHits = [];
+    _impactRay = new THREE.Ray();
+    _impactTriA = new THREE.Vector3();
+    _impactTriB = new THREE.Vector3();
+    _impactTriC = new THREE.Vector3();
+    _impactHitPoint = new THREE.Vector3();
+    _impactTriangle = new THREE.Triangle();
+    _impactClosestPoint = new THREE.Vector3();
+    _impactSurfaceNormal = new THREE.Vector3();
+    _projectedImpact = {
+        position: new THREE.Vector3(),
+        normal: new THREE.Vector3(),
+        parent: null,
     };
-    window.addEventListener('pointerdown', kick);
-    window.addEventListener('keydown', kick);
+
+    setGameRefs({
+        PLAYER,
+        weaponState,
+        WEAPON_DEFS,
+        getCurrentEvolution: weaponsModule.getCurrentEvolution,
+        scoreState,
+        waveState,
+    });
+}
+
+function setupCanvasPointerLock() {
+    if (canvasPointerLockBound) return;
+    const canvas = document.querySelector('canvas');
+    if (!canvas) return;
+
+    canvasPointerLockBound = true;
+    canvas.addEventListener('click', () => {
+        if (gameState === GAME_STATES.PLAYING) {
+            requestPointerLock();
+            audioApi?.resumeAudio();
+        }
+    });
+}
+
+function setupWeaponSwitchInput() {
+    if (weaponSwitchInputBound) return;
+    weaponSwitchInputBound = true;
+
+    document.addEventListener('keydown', (e) => {
+        if (gameState !== GAME_STATES.PLAYING) return;
+
+        const num = parseInt(e.key, 10);
+        if (num >= 1 && num <= 4) {
+            switchWeapon(num - 1);
+            showWeaponSwitch(num - 1);
+            playSFXSafe('weapon_switch');
+        }
+    });
+
+    document.addEventListener('wheel', (e) => {
+        if (gameState !== GAME_STATES.PLAYING) return;
+
+        const dir = e.deltaY > 0 ? 1 : -1;
+        const newIdx = (weaponState.currentIndex + dir + WEAPON_DEFS.length) % WEAPON_DEFS.length;
+        switchWeapon(newIdx);
+        showWeaponSwitch(newIdx);
+        playSFXSafe('weapon_switch');
+    });
 }
 
 // Human-readable progress line for the loading screen.
-// Examples:
-//   "LOADING Zombie_1_Unsteady_Walk_withSkin.glb  (7/28)  0.8 / 2.4 MB"
-//   "LOADING Floor_Metal_1.glb  (12/28)"
 function formatAssetProgress(name, done, total, bytesLoaded, bytesTotal) {
     const count = total > 0 ? `  (${Math.min(done + 1, total)}/${total})` : '';
     const bytes = bytesTotal > 0
@@ -194,202 +478,78 @@ function formatBytes(n) {
     return n + ' B';
 }
 
-function delay(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-// ---- MENU HANDLERS ----
-
-function setupMenuHandlers() {
-    // Title screen
-    document.getElementById('btn-start').addEventListener('click', startGame);
-    document.getElementById('btn-controls').addEventListener('click', () => showScreen('controls'));
-    document.getElementById('btn-close-controls').addEventListener('click', () => showScreen('title'));
-
-    // Pause screen
-    document.getElementById('btn-resume').addEventListener('click', resumeGame);
-    document.getElementById('btn-quit').addEventListener('click', quitToMenu);
-
-    // Game over screen
-    document.getElementById('btn-retry').addEventListener('click', startGame);
-    document.getElementById('btn-menu').addEventListener('click', quitToMenu);
-
-    // Audio settings (reachable from title and pause)
-    setupSettingsHandlers();
-
-    // ESC handling. During gameplay the pointer is locked, and the browser
-    // swallows the ESC keydown that exits the lock — the page never receives it.
-    // That's why ESC used to need two presses to pause. So we pause on the
-    // pointerlockchange that the lock-exit fires (below), and only handle ESC
-    // keydown directly here for unpausing and the rare no-lock case.
-    document.addEventListener('keydown', (e) => {
-        if (e.code !== 'Escape') return;
-        if (gameState === GAME_STATES.PLAYING) {
-            // Fallback only when the pointer isn't locked (lock failed); when
-            // locked, the pointerlockchange handler below does the pausing.
-            if (!document.pointerLockElement) pauseGame();
-        } else if (gameState === GAME_STATES.PAUSED) {
-            resumeGame();
-        }
-    });
-
-    // Losing the pointer lock during play (ESC, or alt-tab / focus loss) pauses
-    // the game — this is what lets a single ESC open the pause menu.
-    document.addEventListener('pointerlockchange', () => {
-        if (!document.pointerLockElement && gameState === GAME_STATES.PLAYING) {
-            pauseGame();
-        }
-    });
-
-    // Click canvas to re-lock pointer during gameplay
-    const canvas = document.querySelector('canvas');
-    if (canvas) {
-        canvas.addEventListener('click', () => {
-            if (gameState === GAME_STATES.PLAYING) {
-                requestPointerLock();
-                resumeAudio();
-            }
-        });
-    }
-}
-
-// Audio settings overlay — mute toggle + music/SFX volume sliders. Opened from
-// the title and pause menus; closing just hides the overlay so the screen
-// underneath (title or pause) stays put.
-function setupSettingsHandlers() {
-    const overlay = document.getElementById('settings-overlay');
-    const muteEl = document.getElementById('set-mute');
-    const musicEl = document.getElementById('set-music');
-    const sfxEl = document.getElementById('set-sfx');
-    const musicVal = document.getElementById('set-music-val');
-    const sfxVal = document.getElementById('set-sfx-val');
-    if (!overlay) return;
-
-    // Mirror the live audio settings onto the controls (called on open so the
-    // sliders reflect persisted/localStorage values).
-    function syncControls() {
-        const s = getAudioSettings();
-        muteEl.checked = s.muted;
-        musicEl.value = Math.round(s.musicVolume * 100);
-        sfxEl.value = Math.round(s.sfxVolume * 100);
-        musicVal.textContent = musicEl.value + '%';
-        sfxVal.textContent = sfxEl.value + '%';
-    }
-
-    function openSettings() {
-        // initAudio is a no-op after first call; ensures the graph exists so
-        // changes apply even when opened from the title before play. resumeAudio
-        // un-suspends the context (it starts suspended until a user gesture) so
-        // the SFX preview is audible from the title screen too.
-        initAudio();
-        resumeAudio();
-        syncControls();
-        overlay.classList.remove('hidden');
-    }
-    function closeSettings() {
-        overlay.classList.add('hidden');
-    }
-
-    musicEl.addEventListener('input', () => {
-        setMusicVolume(musicEl.value / 100);
-        musicVal.textContent = musicEl.value + '%';
-    });
-    sfxEl.addEventListener('input', () => {
-        setSfxVolume(sfxEl.value / 100);
-        sfxVal.textContent = sfxEl.value + '%';
-        playSFX('weapon_switch'); // audible preview of the SFX level
-    });
-    muteEl.addEventListener('change', () => setMuted(muteEl.checked));
-
-    document.getElementById('btn-settings').addEventListener('click', openSettings);
-    document.getElementById('btn-settings-pause').addEventListener('click', openSettings);
-    document.getElementById('btn-close-settings').addEventListener('click', closeSettings);
-}
-
-function setupWeaponSwitchInput() {
-    document.addEventListener('keydown', (e) => {
-        if (gameState !== GAME_STATES.PLAYING) return;
-
-        const num = parseInt(e.key, 10);
-        if (num >= 1 && num <= 4) {
-            switchWeapon(num - 1);
-            showWeaponSwitch(num - 1);
-            playSFX('weapon_switch');
-        }
-    });
-
-    document.addEventListener('wheel', (e) => {
-        if (gameState !== GAME_STATES.PLAYING) return;
-
-        const dir = e.deltaY > 0 ? 1 : -1;
-        let newIdx = (weaponState.currentIndex + dir + WEAPON_DEFS.length) % WEAPON_DEFS.length;
-        switchWeapon(newIdx);
-        showWeaponSwitch(newIdx);
-        playSFX('weapon_switch');
-    });
-}
-
 // ---- GAME STATE TRANSITIONS ----
 
 function startGame() {
-    // Reset all systems
     resetPlayer();
     resetWeapons();
     resetEnemies();
     resetGameLogic();
     resetEffects();
 
+    if (clock) clock.getDelta();
     gameState = GAME_STATES.PLAYING;
     showScreen('gameplay');
     requestPointerLock();
-    resumeAudio();
-    // Switch to the other track for gameplay (the menu plays the first track).
-    nextMusicTrack();
 
-    // Announce first wave after brief delay
+    audioApi.initAudio();
+    audioApi.resumeAudio();
+    audioApi.nextMusicTrack();
+
     setTimeout(() => announceWave(1), 1000);
 }
 
-function pauseGame() {
+async function pauseGame() {
+    if (gameState !== GAME_STATES.PLAYING) return;
     gameState = GAME_STATES.PAUSED;
-    showScreen('pause');
     exitPointerLock();
-    // Keep the soundtrack playing while paused so the volume can be judged
-    // when the settings panel is opened from here.
+    await transitionToScreen('pause', { outDuration: 260, inDuration: 360 });
 }
 
-function resumeGame() {
+async function resumeGame() {
+    if (!gameReady) return;
     gameState = GAME_STATES.PLAYING;
-    showScreen('gameplay');
     requestPointerLock();
-    startMusic();
+    audioApi?.startMusic();
+    await transitionToScreen('gameplay', { outDuration: 260, inDuration: 360 });
 }
 
-function gameOver() {
+async function gameOver() {
+    if (gameState === GAME_STATES.GAME_OVER) return;
     gameState = GAME_STATES.GAME_OVER;
     exitPointerLock();
-    stopMusic();
-    playSFX('game_over');
+    audioApi?.stopMusic();
+    playSFXSafe('game_over');
 
     const isNewHighScore = saveHighScore();
+    await fadeOut(480);
     showScreen('gameover');
     showNewHighScore(isNewHighScore);
+    await fadeIn(560);
 }
 
-function quitToMenu() {
+async function quitToMenu() {
+    if (gameReady) exitPointerLock();
     gameState = GAME_STATES.TITLE;
-    exitPointerLock();
+    await fadeOut(320);
     showScreen('title');
-    // Soundtrack plays on the menu too (restarts if game over had stopped it).
-    startMusic();
+    audioApi?.startMusic();
+    await fadeIn(420);
 }
 
 // ---- GAME LOOP ----
 
+function startGameLoop() {
+    if (gameLoopStarted) return;
+    gameLoopStarted = true;
+    requestAnimationFrame(gameLoop);
+}
+
 function gameLoop() {
     requestAnimationFrame(gameLoop);
+    if (!gameReady) return;
 
-    const dt = Math.min(clock.getDelta(), 0.05); // Clamp delta time
+    const dt = Math.min(clock.getDelta(), 0.05);
     frameCount++;
 
     switch (gameState) {
@@ -397,11 +557,9 @@ function gameLoop() {
             updateGameplay(dt);
             break;
         case GAME_STATES.PAUSED:
-            // Still render but don't update
             break;
         case GAME_STATES.TITLE:
         case GAME_STATES.GAME_OVER:
-            // Slow camera rotation for title/gameover
             camera.position.set(
                 Math.sin(frameCount * 0.002) * 15,
                 8,
@@ -411,8 +569,6 @@ function gameLoop() {
             break;
     }
 
-    // Apply screen shake offset around render — restored immediately after so
-    // subsequent frame updates operate on the true camera position.
     const shakeOffset = getScreenShakeOffset();
     camera.position.add(shakeOffset);
     renderer.render(scene, camera);
@@ -420,43 +576,27 @@ function gameLoop() {
 }
 
 function updateGameplay(dt) {
-    // Snapshot alive enemies first so player movement can collide against them.
     const aliveEnemies = getAliveEnemies();
 
-    // 1. Input & Player Movement (collides with walls + alive zombies)
-    const inputState = updatePlayer(dt, aliveEnemies);
-
-    // 2. Weapons
+    updatePlayer(dt, aliveEnemies);
     updateWeapons(dt, aliveEnemies, onWeaponHit);
-
-    // 3. Enemies (DoT kills route through onStatusKill to keep score consistent)
     updateEnemies(dt, onEnemyAttackPlayer, onStatusKill);
-
-    // 3b. Acid pool ticks — dps applied to enemies inside any active pool.
     applyAcidPoolTicks(dt, aliveEnemies);
 
-    // 4. Wave management
     updateWaves(dt, onWaveStart, onBossWave);
 
-    // 5. Environmental traps
     const trapDamage = updateTraps(dt, aliveEnemies);
     if (trapDamage > 0) {
         damagePlayer(trapDamage);
         onPlayerDamaged();
-        playSFX('player_hurt');
+        playSFXSafe('player_hurt');
     }
 
-    // 6. Combo system
     updateCombo(dt);
-
-    // 7. Visual effects
     updateEffects(dt);
     updateScreenShake(dt);
-
-    // 8. HUD
     updateHUD();
 
-    // 9. Check player death
     if (!PLAYER.isAlive) {
         gameOver();
     }
@@ -464,19 +604,175 @@ function updateGameplay(dt) {
 
 // ---- CALLBACKS ----
 
+function resolveImpactDirection(hitContext) {
+    if (hitContext.impactDir && hitContext.impactDir.lengthSq() > 0.0001) {
+        _scratchImpactDir.copy(hitContext.impactDir);
+    } else {
+        _scratchImpactDir.copy(getPlayerForward());
+    }
+    if (_scratchImpactDir.lengthSq() < 0.0001) _scratchImpactDir.set(0, 0, -1);
+    return _scratchImpactDir.normalize();
+}
+
+function isImpactMesh(object) {
+    if (!object?.isMesh || !object.visible || !object.geometry?.attributes?.position) return false;
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    return !materials.some(mat => mat?.side === THREE.BackSide);
+}
+
+function getEnemyImpactDecalParent(enemy, hitPoint) {
+    const bones = enemy.impactBones;
+    if (!bones || bones.length === 0) return enemy.root;
+
+    let bestBone = enemy.root;
+    let bestDistSq = Infinity;
+    for (let i = 0; i < bones.length; i++) {
+        const bone = bones[i];
+        bone.getWorldPosition(_scratchImpactBonePos);
+        const distSq = _scratchImpactBonePos.distanceToSquared(hitPoint);
+        if (distSq < bestDistSq) {
+            bestDistSq = distSq;
+            bestBone = bone;
+        }
+    }
+    return bestBone;
+}
+
+function getMeshVertexWorld(mesh, vertexIndex, target) {
+    target.fromBufferAttribute(mesh.geometry.attributes.position, vertexIndex);
+    if (mesh.isSkinnedMesh && typeof mesh.boneTransform === 'function') {
+        mesh.boneTransform(vertexIndex, target);
+    }
+    return target.applyMatrix4(mesh.matrixWorld);
+}
+
+function setProjectedImpactFromMeshHit(enemy, point, normal, impactDir) {
+    _projectedImpact.position.copy(point);
+    _projectedImpact.normal.copy(normal);
+    if (_projectedImpact.normal.lengthSq() < 0.0001) {
+        _projectedImpact.normal.copy(impactDir).multiplyScalar(-1);
+    }
+    _projectedImpact.normal.normalize();
+    if (_projectedImpact.normal.dot(impactDir) > 0) {
+        _projectedImpact.normal.multiplyScalar(-1);
+    }
+    _projectedImpact.parent = getEnemyImpactDecalParent(enemy, _projectedImpact.position);
+    return true;
+}
+
+function projectEnemyImpactOnMesh(enemy, fallbackPoint, impactDir) {
+    if (!enemy.bodyGroup) return false;
+
+    enemy.root.updateWorldMatrix(true, true);
+    _scratchImpactOrigin.copy(fallbackPoint).addScaledVector(impactDir, -4.0);
+    _impactRay.set(_scratchImpactOrigin, impactDir);
+
+    _impactRaycaster.set(_scratchImpactOrigin, impactDir);
+    _impactRaycaster.near = 0;
+    _impactRaycaster.far = 8;
+    _impactRayHits.length = 0;
+    _impactRaycaster.intersectObject(enemy.bodyGroup, true, _impactRayHits);
+    for (let i = 0; i < _impactRayHits.length; i++) {
+        const hit = _impactRayHits[i];
+        if (!isImpactMesh(hit.object)) continue;
+        _impactSurfaceNormal.copy(impactDir).multiplyScalar(-1);
+        if (hit.face) {
+            _impactNormalMatrix.getNormalMatrix(hit.object.matrixWorld);
+            _impactSurfaceNormal.copy(hit.face.normal).applyMatrix3(_impactNormalMatrix).normalize();
+        }
+        return setProjectedImpactFromMeshHit(enemy, hit.point, _impactSurfaceNormal, impactDir);
+    }
+
+    let bestRayDistance = Infinity;
+    let bestClosestDistanceSq = Infinity;
+    let foundRayHit = false;
+    let foundClosestPoint = false;
+
+    enemy.bodyGroup.traverse(mesh => {
+        if (!isImpactMesh(mesh)) return;
+        const geometry = mesh.geometry;
+        const position = geometry.attributes.position;
+        const index = geometry.index;
+        const triCount = index ? Math.floor(index.count / 3) : Math.floor(position.count / 3);
+
+        for (let tri = 0; tri < triCount; tri++) {
+            const ia = index ? index.getX(tri * 3) : tri * 3;
+            const ib = index ? index.getX(tri * 3 + 1) : tri * 3 + 1;
+            const ic = index ? index.getX(tri * 3 + 2) : tri * 3 + 2;
+
+            getMeshVertexWorld(mesh, ia, _impactTriA);
+            getMeshVertexWorld(mesh, ib, _impactTriB);
+            getMeshVertexWorld(mesh, ic, _impactTriC);
+
+            const rayHit = _impactRay.intersectTriangle(_impactTriA, _impactTriB, _impactTriC, false, _impactHitPoint);
+            if (rayHit) {
+                const distance = _scratchImpactOrigin.distanceTo(_impactHitPoint);
+                if (distance < bestRayDistance) {
+                    bestRayDistance = distance;
+                    THREE.Triangle.getNormal(_impactTriA, _impactTriB, _impactTriC, _impactSurfaceNormal);
+                    setProjectedImpactFromMeshHit(enemy, _impactHitPoint, _impactSurfaceNormal, impactDir);
+                    foundRayHit = true;
+                }
+                continue;
+            }
+
+            if (foundRayHit) continue;
+
+            _impactTriangle.set(_impactTriA, _impactTriB, _impactTriC);
+            _impactTriangle.closestPointToPoint(fallbackPoint, _impactClosestPoint);
+            const closestDistanceSq = _impactClosestPoint.distanceToSquared(fallbackPoint);
+            if (closestDistanceSq < bestClosestDistanceSq) {
+                bestClosestDistanceSq = closestDistanceSq;
+                THREE.Triangle.getNormal(_impactTriA, _impactTriB, _impactTriC, _impactSurfaceNormal);
+                setProjectedImpactFromMeshHit(enemy, _impactClosestPoint, _impactSurfaceNormal, impactDir);
+                foundClosestPoint = true;
+            }
+        }
+    });
+
+    return foundRayHit || foundClosestPoint;
+}
+
+function projectEnemyImpact(enemy, fallbackPoint, impactDir, forceMeshProjection = false) {
+    _projectedImpact.position.copy(fallbackPoint);
+    _projectedImpact.normal.copy(impactDir).multiplyScalar(-1).normalize();
+    _projectedImpact.parent = getEnemyImpactDecalParent(enemy, fallbackPoint);
+
+    if (forceMeshProjection && projectEnemyImpactOnMesh(enemy, fallbackPoint, impactDir)) {
+        return _projectedImpact;
+    }
+
+    const bodyY = Math.max(0.45, Math.min(fallbackPoint.y, enemy.type === 'boss' ? 3.0 : 1.8));
+    _scratchFaceNormal.copy(impactDir).setY(0);
+    if (_scratchFaceNormal.lengthSq() < 0.0001) {
+        _scratchFaceNormal.copy(impactDir);
+    }
+    _scratchFaceNormal.normalize();
+    _scratchVisualHitPoint.copy(enemy.root.position);
+    _scratchVisualHitPoint.y = bodyY;
+    _scratchVisualHitPoint.addScaledVector(_scratchFaceNormal, -(enemy.hitRadius || 0.7));
+
+    _projectedImpact.position.copy(_scratchVisualHitPoint);
+    _projectedImpact.normal.copy(impactDir).multiplyScalar(-1).normalize();
+    _projectedImpact.parent = getEnemyImpactDecalParent(enemy, _projectedImpact.position);
+    return _projectedImpact;
+}
+
 function onWeaponHit(enemy, hitPoint, damage, weaponIndex, hitContext = {}) {
     const weapon = WEAPON_DEFS[weaponIndex];
     const fx = weapon.fx || {};
     const hitColor = weapon.projectileColor || weapon.color;
 
-    // Knockback direction: away from player. For splash/AoE hits (hitContext.fromSplash),
-    // use a direction radiating out of the explosion center instead.
     _scratchDir.copy(getPlayerForward()).setY(0);
     if (hitContext.fromSplash && hitContext.splashCenter) {
         _scratchDir.copy(enemy.root.position).sub(hitContext.splashCenter).setY(0);
     }
     if (_scratchDir.lengthSq() < 0.0001) _scratchDir.set(0, 0, 1);
     _scratchDir.normalize();
+
+    const impactDir = resolveImpactDirection(hitContext);
+    const shouldProjectDecalToMesh = weaponIndex === 0 && !hitContext.fromSplash;
+    const projectedImpact = projectEnemyImpact(enemy, hitPoint, impactDir, shouldProjectDecalToMesh);
 
     const knockbackStrength = hitContext.fromSplash
         ? (fx.knockback || 0) * 0.6
@@ -489,26 +785,33 @@ function onWeaponHit(enemy, hitPoint, damage, weaponIndex, hitContext = {}) {
         statusEffect: fx.status ? { ...fx.status, weaponIndex } : null,
     });
 
-    // Hit feedback
     showHitMarker();
-    playSFX('hit_zombie');
+    playSFXSafe('hit_zombie');
 
-    // Generic hit burst (per-element color).
     const particleCount = fx.hitParticles ?? 6;
     if (particleCount > 0) {
-        spawnHitParticles(hitPoint, hitColor, killed ? particleCount + 6 : particleCount);
+        spawnHitParticles(projectedImpact.position, hitColor, killed ? particleCount + 6 : particleCount);
     }
 
-    // Damage number — skip splash victims unless it's a kill to avoid visual clutter.
-    // Anchor on the enemy's head bone so the text sits just above the head instead
-    // of floating wherever the bullet happened to intersect (torso, legs, etc).
+    _scratchImpactNormal.copy(projectedImpact.normal);
+    spawnGreenBloodImpact(projectedImpact.position, { normal: _scratchImpactNormal, scale: killed ? 1.05 : 0.78 });
+    if (weaponIndex === 0 && !hitContext.fromSplash) {
+        const decalScale = Math.min(0.95, Math.max(0.45, (enemy.hitRadius || 1) * 0.5));
+        spawnFrankenImpactDecal(projectedImpact.position, {
+            parent: projectedImpact.parent,
+            normal: _scratchImpactNormal,
+            scale: decalScale,
+            surfaceOffset: 0.16,
+            depthTest: false,
+        });
+    }
+
     if (!hitContext.fromSplash || killed) {
         const isCritDmg = damage >= enemy.maxHealth * 0.5;
         const headPos = getEnemyHeadWorldPos(enemy, _scratchHeadPos);
         spawnDamageNumber(headPos, damage, isCritDmg || (killed && scoreState.comboMultiplier >= 3));
     }
 
-    // Screen shake — kill upgrades to killShake if present.
     const shake = killed ? (fx.killShake || fx.shake) : fx.shake;
     if (shake && !hitContext.fromSplash) {
         triggerScreenShake(shake.amp, shake.duration);
@@ -517,23 +820,21 @@ function onWeaponHit(enemy, hitPoint, damage, weaponIndex, hitContext = {}) {
     if (killed) {
         addKill(enemy.scoreValue);
         bumpCombo();
-        playSFX('enemy_death');
-        playSFX('combo_ding');
-        spawnDeathSplat(hitPoint);
+        playSFXSafe('enemy_death');
+        playSFXSafe('combo_ding');
+        spawnDeathSplat(projectedImpact.position);
         const isCritical = scoreState.comboMultiplier >= 3;
         spawnPopup(getEnemyHeadWorldPos(enemy, _scratchHeadPos), isCritical);
     }
 
-    // Primary-impact-only splash effects. Splash victims already took damage via AoE,
-    // so we skip this block for them to avoid double explosions / stacked pools.
     if (!hitContext.fromSplash) {
         if (fx.splash === 'explosion') {
-            spawnExplosion(hitPoint, fx.explosionRadius || weapon.aoeRadius || 3.0, hitColor);
+            spawnExplosion(projectedImpact.position, fx.explosionRadius || weapon.aoeRadius || 3.0, hitColor);
         } else if (fx.splash === 'liquid') {
-            spawnLiquidSplash(hitPoint, hitColor, fx.splashCount || 8);
+            spawnLiquidSplash(projectedImpact.position, hitColor, fx.splashCount || 8);
             if (fx.acidPoolChance && Math.random() < fx.acidPoolChance) {
                 spawnAcidPool(
-                    hitPoint,
+                    projectedImpact.position,
                     fx.acidPoolRadius || 1.2,
                     fx.acidPoolDuration || 2.0,
                     hitColor,
@@ -544,18 +845,15 @@ function onWeaponHit(enemy, hitPoint, damage, weaponIndex, hitContext = {}) {
     }
 }
 
-// DoT kill path (burn/corrode ticked the enemy to zero). Reuse score/kill pipeline.
 function onStatusKill(enemy, hitPoint, weaponIndex) {
     addKill(enemy.scoreValue);
     bumpCombo();
-    playSFX('enemy_death');
-    playSFX('combo_ding');
+    playSFXSafe('enemy_death');
+    playSFXSafe('combo_ding');
     spawnDeathSplat(hitPoint);
     spawnPopup(getEnemyHeadWorldPos(enemy, _scratchHeadPos), scoreState.comboMultiplier >= 3);
 }
 
-// Per-frame acid-pool damage tick: any enemy standing inside an active pool
-// takes dps * tickInterval (0.25s) damage with corrode status refreshed.
 const ACID_TICK_INTERVAL = 0.25;
 function applyAcidPoolTicks(dt, aliveEnemies) {
     const pools = getActiveAcidPools();
@@ -580,28 +878,21 @@ function applyAcidPoolTicks(dt, aliveEnemies) {
 function onEnemyAttackPlayer(damage) {
     damagePlayer(damage);
     onPlayerDamaged();
-    playSFX('player_hurt');
+    playSFXSafe('player_hurt');
 }
 
 function onWaveStart(waveNumber) {
     announceWave(waveNumber);
-    playSFX('wave_start');
+    playSFXSafe('wave_start');
 }
 
 function onBossWave(waveNumber) {
     setTimeout(() => {
         announceBoss();
-        playSFX('boss_appear');
+        playSFXSafe('boss_appear');
     }, 1500);
 }
 
 // ---- BOOT ----
 
-init().catch(err => {
-    console.error('Game initialization failed:', err);
-    const loadingText = document.getElementById('loading-text');
-    if (loadingText) {
-        loadingText.textContent = 'ERROR: ' + err.message;
-        loadingText.style.color = '#FF3B30';
-    }
-});
+init();
