@@ -14,3 +14,9 @@ Thumbs.db
 *.swp
 .vscode/
 .idea/
+
+# Packaged build artifacts
+*.zip
+
+# Stray root-level duplicate of assets/Sandscape_Poster.jpg
+/Sandscape_Poster.jpg

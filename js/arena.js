@@ -7,21 +7,23 @@ import { scene, COLORS, NEON_PALETTE, createToonMaterial, addOutline } from './s
 import { cloneAsset } from './assetLoader.js';
 
 // Custom-prop GLBs live under one of several kit folders (CorridorKit,
-// arenaKit, …). The server exposes a /api/asset-kits manifest that maps
-// every kit GLB's bare filename to the folder it lives in, so the level
-// schema can keep storing just the filename. CorridorKit is the default
-// fallback for legacy entries authored before the manifest existed and
-// for cases where the fetch fails.
+// arenaKit, …). data/assetKits.json maps every kit GLB's bare filename to
+// the folder it lives in, so the level schema can keep storing just the
+// filename. The file is a static manifest (relative path, no server needed)
+// so the game runs on plain static hosting; regenerate it with
+// tools/build-asset-kits.py whenever kit GLBs are added or moved.
+// CorridorKit is the default fallback for legacy entries authored before
+// the manifest existed and for cases where the fetch fails.
 const DEFAULT_KIT_FOLDER = 'CorridorKit';
 let assetKitMap = {};
 
 async function loadAssetKitManifest() {
     try {
-        const resp = await fetch('/api/asset-kits', { cache: 'no-store' });
+        const resp = await fetch('data/assetKits.json', { cache: 'no-store' });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         assetKitMap = await resp.json();
     } catch (e) {
-        console.warn('Could not load /api/asset-kits, falling back to CorridorKit-only:', e);
+        console.warn('Could not load data/assetKits.json, falling back to CorridorKit-only:', e);
         assetKitMap = {};
     }
 }
