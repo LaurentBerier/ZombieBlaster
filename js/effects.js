@@ -617,24 +617,30 @@ function spawnFrankenImpactDecal(position, options = {}) {
         transparent: true,
         opacity: options.opacity ?? 0.82,
         alphaTest: 0.03,
+        // depthTest ON so a decal is correctly occluded by nearer geometry — a splat
+        // on a far wall must NOT paint over a zombie standing in front of it. It
+        // stays visible on its own surface via a strong polygonOffset bias (wins the
+        // coplanar depth fight, even at grazing floor angles) plus depthWrite OFF
+        // (so it never occludes anything itself).
         depthTest: options.depthTest ?? true,
         depthWrite: false,
         side: THREE.DoubleSide,
         polygonOffset: true,
-        polygonOffsetFactor: -1,
-        polygonOffsetUnits: -1,
+        polygonOffsetFactor: -2,
+        polygonOffsetUnits: -6,
     });
     const decal = new THREE.Mesh(geometry, material);
     decal.name = 'franken_impact_decal';
     decal.renderOrder = 6;
 
+    const roll = Math.random() * Math.PI * 2;
     const normal = resolveImpactNormal(position, options.normal);
     attachWorldSpaceDecal(
         decal,
         options.parent,
         position,
         normal,
-        Math.random() * Math.PI * 2,
+        roll,
         options.surfaceOffset ?? 0.025
     );
 
@@ -644,6 +650,13 @@ function spawnFrankenImpactDecal(position, options = {}) {
         lifetime,
         maxLifetime: lifetime,
         baseOpacity: material.opacity,
+        // Body splats billboard toward the camera each frame so a shot never
+        // reveals the flat plane edge-on; ground/wall splats keep their surface
+        // orientation. `owner` is the enemy the splat rides so we can drop it the
+        // instant that enemy despawns (no lingering splats where a body died).
+        billboard: !!options.billboard,
+        roll,
+        owner: options.owner || null,
     });
 }
 
@@ -1105,10 +1118,21 @@ function updateEffects(dt) {
 
     for (let i = frankenImpactDecals.length - 1; i >= 0; i--) {
         const decal = frankenImpactDecals[i];
+        // Drop the splat the moment its host enemy despawns so nothing is left
+        // hanging in the air where the body was.
+        if (decal.owner && !decal.owner.alive) {
+            destroyFrankenImpactDecal(decal);
+            continue;
+        }
         decal.lifetime -= dt;
         if (decal.lifetime <= 0) {
             destroyFrankenImpactDecal(decal);
             continue;
+        }
+        // Face the camera (body splats only) so the plane never goes edge-on.
+        if (decal.billboard && decal.mesh.parent) {
+            decal.mesh.lookAt(camera.position);
+            decal.mesh.rotateZ(decal.roll);
         }
         if (decal.lifetime < FRANKEN_DECAL_FADE_TIME) {
             decal.mesh.material.opacity = decal.baseOpacity * (decal.lifetime / FRANKEN_DECAL_FADE_TIME);
