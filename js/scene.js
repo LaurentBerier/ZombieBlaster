@@ -34,11 +34,15 @@ function initScene() {
     camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 200);
     camera.position.set(0, 1.7, 0);
 
-    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // Cap device-pixel-ratio at 1.5: on a retina display DPR 2 renders 4x the
+    // pixels (huge fillrate cost with this many neon lights). 1.5 stays crisp for
+    // a fast FPS while cutting ~44% of the shaded pixels vs 2.0.
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    // Shadow mapping is enabled by nothing here — no light sets castShadow, so it
+    // only added shader complexity. Leave it off.
+    renderer.shadowMap.enabled = false;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.6;
     document.body.prepend(renderer.domElement);
