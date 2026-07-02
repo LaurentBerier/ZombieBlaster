@@ -7,6 +7,7 @@ import { scene, COLORS, NEON_PALETTE, createToonMaterial, addOutline } from './s
 import { PLAYER, getPlayerPosition } from './player.js';
 import { ARENA, ROOM_DEFS } from './arena.js';
 import { cloneAsset, getAssetAnimations } from './assetLoader.js';
+import { prepareEnemyDecalMaterials, disposeEnemyDecalMaterials } from './decals.js';
 import { playGrowl } from './audio.js';
 
 // Target world-space height for the zombie GLB (in Three.js units).
@@ -70,6 +71,20 @@ function resolveEnemyWallCollision(enemy) {
         if (wall.isPlatform) continue;
         // Wall sitting entirely above the zombie's head — walk straight under.
         if (wall.minY >= ENEMY_TOP_Y) continue;
+
+        // Round props (tanks/barrels): circle-vs-circle eject around the footprint.
+        if (wall.shape === 'cylinder') {
+            const dx = pos.x - wall.cx;
+            const dz = pos.z - wall.cz;
+            const distSq = dx * dx + dz * dz;
+            const reach = radius + wall.radius;
+            if (distSq < reach * reach && distSq > 0.0001) {
+                const dist = Math.sqrt(distSq);
+                pos.x = wall.cx + (dx / dist) * reach;
+                pos.z = wall.cz + (dz / dist) * reach;
+            }
+            continue;
+        }
 
         const px = pos.x;
         const pz = pos.z;
@@ -207,6 +222,9 @@ function applyGLBToEnemy(enemy) {
     const model = cloneAsset(assetIds.walk);
     if (!model) return false;
 
+    // Dispose the previous life's per-enemy patched material clones before the
+    // old GLB is detached — clear() alone leaks their renderer program refs.
+    disposeEnemyDecalMaterials(enemy.bodyGroup);
     enemy.bodyGroup.clear();
     // Drop any prior mixer so we don't tick a detached skeleton.
     enemy.mixer = null;
@@ -320,6 +338,12 @@ function applyGLBToEnemy(enemy) {
         }
     }
 
+    // Clone + patch the GLB materials for shader-projected impact decals.
+    // Must run BEFORE collectTintMaterials so the tint list points at the
+    // per-enemy clones that actually render (cloneAsset shares materials
+    // across every instance of a type).
+    prepareEnemyDecalMaterials(enemy);
+
     // Rebuild tint-material list now that bodyGroup was re-populated from the GLB.
     collectTintMaterials(enemy);
     return true;
@@ -412,6 +436,9 @@ function createEnemyObject() {
         bodyGroup,
         type: ENEMY_TYPES.ZOMBIE,
         alive: false,
+        // Incremented on every (re)spawn of this pooled slot — attachments
+        // from a previous life (impact decals) compare it to detect recycling.
+        spawnGeneration: 0,
         health: 30,
         maxHealth: 30,
         speed: 2.5,
@@ -458,6 +485,7 @@ function spawnEnemy(type, position) {
     if (!enemy) return null;
 
     enemy.alive = true;
+    enemy.spawnGeneration = (enemy.spawnGeneration || 0) + 1;
     enemy.root.visible = true;
     enemy.animState = 'walk';
     enemy.animTimer = 0;

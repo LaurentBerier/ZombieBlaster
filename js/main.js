@@ -44,12 +44,10 @@ let spawnDeathSplat, spawnGreenBloodImpact, spawnFrankenImpactDecal;
 let spawnDamageNumber, spawnExplosion, spawnLiquidSplash;
 let spawnAcidPool, getActiveAcidPools, triggerScreenShake, updateScreenShake;
 let getScreenShakeOffset, showHitMarker, resetEffects;
+let initDecals, updateDecals, resetDecals, spawnImpactDecal, prewarmDecals;
 let preloadAssets;
-let _scratchDir, _scratchHeadPos, _scratchImpactNormal, _scratchImpactBonePos;
-let _scratchImpactDir, _scratchImpactOrigin, _scratchVisualHitPoint, _scratchFaceNormal;
-let _impactNormalMatrix, _impactRaycaster, _impactRayHits, _impactRay;
-let _impactTriA, _impactTriB, _impactTriC, _impactHitPoint, _impactTriangle;
-let _impactClosestPoint, _impactSurfaceNormal;
+let _scratchDir, _scratchHeadPos, _scratchImpactNormal;
+let _scratchImpactDir, _scratchVisualHitPoint, _scratchFaceNormal;
 let _projectedImpact;
 
 let weaponSwitchInputBound = false;
@@ -255,6 +253,7 @@ async function loadGameRuntime() {
         enemiesModule,
         gameLogicModule,
         effectsModule,
+        decalsModule,
         assetLoaderModule,
         audioModule,
     ] = await Promise.all([
@@ -265,6 +264,7 @@ async function loadGameRuntime() {
         import('./enemies.js'),
         import('./gameLogic.js'),
         import('./effects.js'),
+        import('./decals.js'),
         import('./assetLoader.js'),
         loadAudioModule(),
     ]);
@@ -277,6 +277,7 @@ async function loadGameRuntime() {
         enemiesModule,
         gameLogicModule,
         effectsModule,
+        decalsModule,
         assetLoaderModule,
         audioModule,
     });
@@ -328,6 +329,8 @@ async function loadGameRuntime() {
     updateLoadingBar(97, 'ADDING EXPLOSIONS...');
 
     initEffects();
+    initDecals();
+    prewarmRenderer();
     updateLoadingBar(99, 'TUNING AUDIO...');
 
     audioApi.initAudio();
@@ -337,6 +340,25 @@ async function loadGameRuntime() {
     gameReady = true;
     startGameLoop();
     await delay(240);
+}
+
+// Compile every shader the game will use before gameplay starts, so the first
+// bullet/impact/explosion doesn't hitch while its GLSL program links mid-frame.
+// The projectile + effect pools (and the bullet lights) are already in the scene;
+// we also spawn one throwaway decal far off-screen so its dynamically-built
+// material is compiled too. renderer.compile() links all scene material programs
+// for the current (now stable) light set; the warm render uploads GPU buffers.
+function prewarmRenderer() {
+    try {
+        spawnFrankenImpactDecal(new THREE.Vector3(0, -500, 0), {
+            normal: new THREE.Vector3(0, 1, 0), scale: 0.5, lifetime: 0.001,
+        });
+        prewarmDecals();
+        renderer.compile(scene, camera);
+        renderer.render(scene, camera);
+    } catch (e) {
+        console.warn('[prewarm] shader precompile skipped:', e);
+    }
 }
 
 function loadThreeScript() {
@@ -358,7 +380,7 @@ function loadThreeScript() {
 function wireGameModules(modules) {
     const {
         sceneModule, arenaModule, playerModule, weaponsModule, enemiesModule,
-        gameLogicModule, effectsModule, assetLoaderModule,
+        gameLogicModule, effectsModule, decalsModule, assetLoaderModule,
     } = modules;
 
     ({ scene, camera, renderer, clock } = sceneModule);
@@ -386,31 +408,20 @@ function wireGameModules(modules) {
         spawnAcidPool, getActiveAcidPools, triggerScreenShake, updateScreenShake,
         getScreenShakeOffset, showHitMarker, resetEffects,
     } = effectsModule);
+    ({
+        initDecals, updateDecals, resetDecals, spawnImpactDecal, prewarmDecals,
+    } = decalsModule);
     ({ preloadAssets } = assetLoaderModule);
 
     _scratchDir = new THREE.Vector3();
     _scratchHeadPos = new THREE.Vector3();
     _scratchImpactNormal = new THREE.Vector3();
-    _scratchImpactBonePos = new THREE.Vector3();
     _scratchImpactDir = new THREE.Vector3();
-    _scratchImpactOrigin = new THREE.Vector3();
     _scratchVisualHitPoint = new THREE.Vector3();
     _scratchFaceNormal = new THREE.Vector3();
-    _impactNormalMatrix = new THREE.Matrix3();
-    _impactRaycaster = new THREE.Raycaster();
-    _impactRayHits = [];
-    _impactRay = new THREE.Ray();
-    _impactTriA = new THREE.Vector3();
-    _impactTriB = new THREE.Vector3();
-    _impactTriC = new THREE.Vector3();
-    _impactHitPoint = new THREE.Vector3();
-    _impactTriangle = new THREE.Triangle();
-    _impactClosestPoint = new THREE.Vector3();
-    _impactSurfaceNormal = new THREE.Vector3();
     _projectedImpact = {
         position: new THREE.Vector3(),
         normal: new THREE.Vector3(),
-        parent: null,
     };
 
     setGameRefs({
@@ -486,6 +497,7 @@ function startGame() {
     resetEnemies();
     resetGameLogic();
     resetEffects();
+    resetDecals();
 
     if (clock) clock.getDelta();
     gameState = GAME_STATES.PLAYING;
@@ -594,6 +606,7 @@ function updateGameplay(dt) {
 
     updateCombo(dt);
     updateEffects(dt);
+    updateDecals(dt);
     updateScreenShake(dt);
     updateHUD();
 
@@ -614,134 +627,11 @@ function resolveImpactDirection(hitContext) {
     return _scratchImpactDir.normalize();
 }
 
-function isImpactMesh(object) {
-    if (!object?.isMesh || !object.visible || !object.geometry?.attributes?.position) return false;
-    const materials = Array.isArray(object.material) ? object.material : [object.material];
-    return !materials.some(mat => mat?.side === THREE.BackSide);
-}
-
-function getEnemyImpactDecalParent(enemy, hitPoint) {
-    const bones = enemy.impactBones;
-    if (!bones || bones.length === 0) return enemy.root;
-
-    let bestBone = enemy.root;
-    let bestDistSq = Infinity;
-    for (let i = 0; i < bones.length; i++) {
-        const bone = bones[i];
-        bone.getWorldPosition(_scratchImpactBonePos);
-        const distSq = _scratchImpactBonePos.distanceToSquared(hitPoint);
-        if (distSq < bestDistSq) {
-            bestDistSq = distSq;
-            bestBone = bone;
-        }
-    }
-    return bestBone;
-}
-
-function getMeshVertexWorld(mesh, vertexIndex, target) {
-    target.fromBufferAttribute(mesh.geometry.attributes.position, vertexIndex);
-    if (mesh.isSkinnedMesh && typeof mesh.boneTransform === 'function') {
-        mesh.boneTransform(vertexIndex, target);
-    }
-    return target.applyMatrix4(mesh.matrixWorld);
-}
-
-function setProjectedImpactFromMeshHit(enemy, point, normal, impactDir) {
-    _projectedImpact.position.copy(point);
-    _projectedImpact.normal.copy(normal);
-    if (_projectedImpact.normal.lengthSq() < 0.0001) {
-        _projectedImpact.normal.copy(impactDir).multiplyScalar(-1);
-    }
-    _projectedImpact.normal.normalize();
-    if (_projectedImpact.normal.dot(impactDir) > 0) {
-        _projectedImpact.normal.multiplyScalar(-1);
-    }
-    _projectedImpact.parent = getEnemyImpactDecalParent(enemy, _projectedImpact.position);
-    return true;
-}
-
-function projectEnemyImpactOnMesh(enemy, fallbackPoint, impactDir) {
-    if (!enemy.bodyGroup) return false;
-
-    enemy.root.updateWorldMatrix(true, true);
-    _scratchImpactOrigin.copy(fallbackPoint).addScaledVector(impactDir, -4.0);
-    _impactRay.set(_scratchImpactOrigin, impactDir);
-
-    _impactRaycaster.set(_scratchImpactOrigin, impactDir);
-    _impactRaycaster.near = 0;
-    _impactRaycaster.far = 8;
-    _impactRayHits.length = 0;
-    _impactRaycaster.intersectObject(enemy.bodyGroup, true, _impactRayHits);
-    for (let i = 0; i < _impactRayHits.length; i++) {
-        const hit = _impactRayHits[i];
-        if (!isImpactMesh(hit.object)) continue;
-        _impactSurfaceNormal.copy(impactDir).multiplyScalar(-1);
-        if (hit.face) {
-            _impactNormalMatrix.getNormalMatrix(hit.object.matrixWorld);
-            _impactSurfaceNormal.copy(hit.face.normal).applyMatrix3(_impactNormalMatrix).normalize();
-        }
-        return setProjectedImpactFromMeshHit(enemy, hit.point, _impactSurfaceNormal, impactDir);
-    }
-
-    let bestRayDistance = Infinity;
-    let bestClosestDistanceSq = Infinity;
-    let foundRayHit = false;
-    let foundClosestPoint = false;
-
-    enemy.bodyGroup.traverse(mesh => {
-        if (!isImpactMesh(mesh)) return;
-        const geometry = mesh.geometry;
-        const position = geometry.attributes.position;
-        const index = geometry.index;
-        const triCount = index ? Math.floor(index.count / 3) : Math.floor(position.count / 3);
-
-        for (let tri = 0; tri < triCount; tri++) {
-            const ia = index ? index.getX(tri * 3) : tri * 3;
-            const ib = index ? index.getX(tri * 3 + 1) : tri * 3 + 1;
-            const ic = index ? index.getX(tri * 3 + 2) : tri * 3 + 2;
-
-            getMeshVertexWorld(mesh, ia, _impactTriA);
-            getMeshVertexWorld(mesh, ib, _impactTriB);
-            getMeshVertexWorld(mesh, ic, _impactTriC);
-
-            const rayHit = _impactRay.intersectTriangle(_impactTriA, _impactTriB, _impactTriC, false, _impactHitPoint);
-            if (rayHit) {
-                const distance = _scratchImpactOrigin.distanceTo(_impactHitPoint);
-                if (distance < bestRayDistance) {
-                    bestRayDistance = distance;
-                    THREE.Triangle.getNormal(_impactTriA, _impactTriB, _impactTriC, _impactSurfaceNormal);
-                    setProjectedImpactFromMeshHit(enemy, _impactHitPoint, _impactSurfaceNormal, impactDir);
-                    foundRayHit = true;
-                }
-                continue;
-            }
-
-            if (foundRayHit) continue;
-
-            _impactTriangle.set(_impactTriA, _impactTriB, _impactTriC);
-            _impactTriangle.closestPointToPoint(fallbackPoint, _impactClosestPoint);
-            const closestDistanceSq = _impactClosestPoint.distanceToSquared(fallbackPoint);
-            if (closestDistanceSq < bestClosestDistanceSq) {
-                bestClosestDistanceSq = closestDistanceSq;
-                THREE.Triangle.getNormal(_impactTriA, _impactTriB, _impactTriC, _impactSurfaceNormal);
-                setProjectedImpactFromMeshHit(enemy, _impactClosestPoint, _impactSurfaceNormal, impactDir);
-                foundClosestPoint = true;
-            }
-        }
-    });
-
-    return foundRayHit || foundClosestPoint;
-}
-
-function projectEnemyImpact(enemy, fallbackPoint, impactDir, forceMeshProjection = false) {
-    _projectedImpact.position.copy(fallbackPoint);
-    _projectedImpact.normal.copy(impactDir).multiplyScalar(-1).normalize();
-    _projectedImpact.parent = getEnemyImpactDecalParent(enemy, fallbackPoint);
-
-    if (forceMeshProjection && projectEnemyImpactOnMesh(enemy, fallbackPoint, impactDir)) {
-        return _projectedImpact;
-    }
-
+// Approximate world-space impact surface on the enemy's bounding cylinder:
+// the shooter-facing point at the hit height. Used to position burst FX
+// (particles, green blood flash, splashes). The DecalManager does its own,
+// finer projection (nearest bone / mesh raycast) for the stamped decal.
+function projectEnemyImpact(enemy, fallbackPoint, impactDir) {
     const bodyY = Math.max(0.45, Math.min(fallbackPoint.y, enemy.type === 'boss' ? 3.0 : 1.8));
     _scratchFaceNormal.copy(impactDir).setY(0);
     if (_scratchFaceNormal.lengthSq() < 0.0001) {
@@ -754,7 +644,6 @@ function projectEnemyImpact(enemy, fallbackPoint, impactDir, forceMeshProjection
 
     _projectedImpact.position.copy(_scratchVisualHitPoint);
     _projectedImpact.normal.copy(impactDir).multiplyScalar(-1).normalize();
-    _projectedImpact.parent = getEnemyImpactDecalParent(enemy, _projectedImpact.position);
     return _projectedImpact;
 }
 
@@ -771,8 +660,7 @@ function onWeaponHit(enemy, hitPoint, damage, weaponIndex, hitContext = {}) {
     _scratchDir.normalize();
 
     const impactDir = resolveImpactDirection(hitContext);
-    const shouldProjectDecalToMesh = weaponIndex === 0 && !hitContext.fromSplash;
-    const projectedImpact = projectEnemyImpact(enemy, hitPoint, impactDir, shouldProjectDecalToMesh);
+    const projectedImpact = projectEnemyImpact(enemy, hitPoint, impactDir);
 
     const knockbackStrength = hitContext.fromSplash
         ? (fx.knockback || 0) * 0.6
@@ -795,15 +683,15 @@ function onWeaponHit(enemy, hitPoint, damage, weaponIndex, hitContext = {}) {
 
     _scratchImpactNormal.copy(projectedImpact.normal);
     spawnGreenBloodImpact(projectedImpact.position, { normal: _scratchImpactNormal, scale: killed ? 1.05 : 0.78 });
-    if (weaponIndex === 0 && !hitContext.fromSplash) {
-        const decalScale = Math.min(0.95, Math.max(0.45, (enemy.hitRadius || 1) * 0.5));
-        spawnFrankenImpactDecal(projectedImpact.position, {
-            parent: projectedImpact.parent,
-            normal: _scratchImpactNormal,
-            scale: decalScale,
-            surfaceOffset: 0.16,
-            depthTest: false,
-        });
+    if (!hitContext.fromSplash) {
+        // Projected impact decal on the enemy body, typed and sized per weapon
+        // (blood / burn / acid / slime). The DecalManager projects onto the
+        // surface, caps counts, fades, and cleans up on despawn. A killing
+        // blow stamps a bigger multi-splat burst for a satisfying gib.
+        const decalScale = fx.decalScale ?? 1;
+        spawnImpactDecal(enemy, projectedImpact.position, impactDir, fx.decalType || 'blood', killed
+            ? { scaleMult: decalScale * 1.35, count: 3, ignoreThrottle: true }
+            : { scaleMult: decalScale });
     }
 
     if (!hitContext.fromSplash || killed) {

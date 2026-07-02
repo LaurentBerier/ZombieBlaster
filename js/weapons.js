@@ -24,6 +24,10 @@ const INFINITE_AMMO = true;
 //   hitParticles   — count of generic burst particles spawned at hit point
 //   shake          — { amp, duration } for triggerScreenShake (0 = no shake)
 //   splash         — post-hit effect: 'explosion' | 'liquid' | null
+//   decalType      — impact decal stamped on the enemy body by the
+//                    DecalManager ('blood'|'slime'|'dirt'|'burn'|'acid'|'generic')
+//   decalScale     — per-weapon size multiplier for that decal (heavy weapons
+//                    leave bigger marks; rapid streams stay smaller)
 const WEAPON_DEFS = [
     {
         name: 'FRANKEN-GUN',
@@ -50,6 +54,8 @@ const WEAPON_DEFS = [
             killShake: { amp: 0.12, duration: 0.12 },
             splash: null,
             trail: 'plasma',
+            decalType: 'blood',
+            decalScale: 1.0,
         },
         evolutionLevels: [
             { scoreThreshold: 0, name: 'FRANKEN-GUN Mk.I', damage: 15, fireRate: 0.15, color: COLORS.magenta },
@@ -85,6 +91,8 @@ const WEAPON_DEFS = [
             splash: 'explosion',
             trail: 'smoke',
             explosionRadius: 3.5,
+            decalType: 'burn',
+            decalScale: 1.7,
         },
         evolutionLevels: [
             { scoreThreshold: 0, name: 'BOWLING LAUNCHER Mk.I', damage: 60, fireRate: 0.8, color: COLORS.orange },
@@ -120,6 +128,8 @@ const WEAPON_DEFS = [
             acidPoolRadius: 1.2,
             acidPoolDuration: 2.0,
             acidPoolDps: 5,
+            decalType: 'acid',
+            decalScale: 0.9,
         },
         evolutionLevels: [
             { scoreThreshold: 0, name: 'SODA LASER Mk.I', damage: 5, fireRate: 0.05, color: COLORS.cyan },
@@ -157,6 +167,8 @@ const WEAPON_DEFS = [
             splash: 'liquid',
             splashCount: 6,
             trail: 'droplet',
+            decalType: 'slime',
+            decalScale: 1.0,
         },
         evolutionLevels: [
             { scoreThreshold: 0, name: 'CRYO BLASTER Mk.I', damage: 7, fireRate: 0.06, color: COLORS.cyan },
@@ -181,6 +193,15 @@ const weaponState = {
 // Projectile pool — sized for Soda stream (~16 concurrent) + rockets (~5) + plasma (~8) plus headroom.
 const projectiles = [];
 const MAX_PROJECTILES = 80;
+
+// Fixed pool of green lights that ride the *nearest* in-flight Franken bolts. A
+// constant, always-present count (rather than one light per bullet toggled on/off)
+// keeps the scene's light total stable, which avoids the per-frame shader
+// recompiles that caused the first-few-seconds stutter — and caps the lighting cost.
+const bulletLights = [];
+const MAX_BULLET_LIGHTS = 5;
+const BULLET_LIGHT_INTENSITY = 6;
+const _bulletLightCandidates = [];
 const FRANKEN_BULLET_SPRITE = {
     url: 'assets/FX/LiquidSpriteSheet2.png',
     columns: 3,
@@ -199,6 +220,13 @@ const _wallImpactSurface = { point: _wallImpactPoint, normal: _wallImpactNormal 
 const _projectilePrevPosition = new THREE.Vector3();
 const _groundImpactPoint = new THREE.Vector3();
 const _groundImpactNormal = new THREE.Vector3(0, 1, 0);
+const _wallImpactHitPoint = new THREE.Vector3();
+// Mesh-raycast surface probe for environment splats (walls/props).
+const _envRaycaster = new THREE.Raycaster();
+const _envRayHits = [];
+const _envSegDir = new THREE.Vector3();
+const _envNormalMatrix = new THREE.Matrix3();
+const _envSurface = { point: new THREE.Vector3(), normal: new THREE.Vector3() };
 
 // Beam visual
 let beamLine = null;
@@ -309,6 +337,16 @@ function initWeapons() {
         };
         scene.add(projRoot);
         projectiles.push(projRoot);
+    }
+
+    // Constant-size green bullet-light pool. Always in the scene (stable light
+    // count) — intensity 0 parks the unused ones; updateProjectiles moves the live
+    // ones onto the nearest bolts each frame.
+    for (let i = 0; i < MAX_BULLET_LIGHTS; i++) {
+        const light = new THREE.PointLight(0x2bff33, 0, 11, 2);
+        light.position.set(0, -1000, 0);
+        scene.add(light);
+        bulletLights.push(light);
     }
 }
 
@@ -880,6 +918,60 @@ function clampValue(value, min, max) {
     return Math.max(min, Math.min(max, value));
 }
 
+// Parametric position (0..1) where segment p0->p1 first enters the wall AABB,
+// or null if the segment never overlaps it. Slab method. Used so a fast,
+// gravity-free bolt is resolved against the surface it actually reaches first
+// this frame (floor vs wall) instead of tunnelling through thin walls or
+// snapping onto whichever wall its end-point happens to land inside.
+function segmentAABBEntryT(p0, p1, wall) {
+    const bounds = [
+        [p0.x, p1.x - p0.x, wall.minX, wall.maxX],
+        [p0.y, p1.y - p0.y, wall.minY ?? 0, wall.maxY ?? Infinity],
+        [p0.z, p1.z - p0.z, wall.minZ, wall.maxZ],
+    ];
+    let tEnter = 0;
+    let tExit = 1;
+    for (let i = 0; i < 3; i++) {
+        const start = bounds[i][0];
+        const delta = bounds[i][1];
+        const lo = bounds[i][2];
+        const hi = bounds[i][3];
+        if (Math.abs(delta) < 1e-9) {
+            if (start < lo || start > hi) return null; // parallel & outside slab
+        } else {
+            let t0 = (lo - start) / delta;
+            let t1 = (hi - start) / delta;
+            if (t0 > t1) { const tmp = t0; t0 = t1; t1 = tmp; }
+            if (t0 > tEnter) tEnter = t0;
+            if (t1 < tExit) tExit = t1;
+            if (tEnter > tExit) return null;
+        }
+    }
+    return tEnter;
+}
+
+// Parametric entry (0..1) where segment p0->p1 first crosses a vertical cylinder
+// collider (round props: tanks/barrels), or null if it misses. 2D ray/circle in
+// XZ, gated by the cylinder's Y span.
+function segmentCylinderEntryT(p0, p1, wall) {
+    const dx = p1.x - p0.x;
+    const dz = p1.z - p0.z;
+    const a = dx * dx + dz * dz;
+    if (a < 1e-9) return null; // no horizontal travel this frame
+    const ox = p0.x - wall.cx;
+    const oz = p0.z - wall.cz;
+    const b = 2 * (ox * dx + oz * dz);
+    const c = ox * ox + oz * oz - wall.radius * wall.radius;
+    const disc = b * b - 4 * a * c;
+    if (disc < 0) return null; // misses the circle
+    let t = (-b - Math.sqrt(disc)) / (2 * a); // near (entry) root
+    if (t < 0) t = 0;       // segment started inside the footprint
+    if (t > 1) return null; // entry lies beyond this frame's segment
+    const y = p0.y + t * (p1.y - p0.y);
+    if (y < wall.minY || y > wall.maxY) return null; // passes above/below the prop
+    return t;
+}
+
 function getWallImpactSurface(point, wall, targetPoint = _wallImpactPoint, targetNormal = _wallImpactNormal) {
     let bestDistance = Infinity;
     let nx = 0;
@@ -919,6 +1011,64 @@ function getWallImpactSurface(point, wall, targetPoint = _wallImpactPoint, targe
     _wallImpactSurface.point = targetPoint;
     _wallImpactSurface.normal = targetNormal;
     return _wallImpactSurface;
+}
+
+// Fallback impact surface on a cylinder collider: the point on the round side
+// nearest the segment hit, with an outward radial normal. Only used if the mesh
+// raycast finds nothing (it normally lands the splat on the real tank surface).
+function getCylinderImpactSurface(point, wall) {
+    let nx = point.x - wall.cx;
+    let nz = point.z - wall.cz;
+    const len = Math.hypot(nx, nz) || 1;
+    nx /= len;
+    nz /= len;
+    _wallImpactNormal.set(nx, 0, nz);
+    _wallImpactPoint.set(wall.cx + nx * wall.radius, point.y, wall.cz + nz * wall.radius);
+    _wallImpactSurface.point = _wallImpactPoint;
+    _wallImpactSurface.normal = _wallImpactNormal;
+    return _wallImpactSurface;
+}
+
+// Raycast the projectile's travel segment (p0 -> p1) against the real environment
+// geometry so a wall/prop splat lands on the actual visible surface and takes its
+// true face normal — the AABB colliders only approximate that (a box face can't
+// follow a slanted or round prop). Returns { point, normal } or null if the ray
+// finds no solid surface, in which case the caller uses the AABB face fallback.
+function raycastEnvironmentSurface(p0, p1) {
+    if (!ARENA.group) return null;
+    _envSegDir.copy(p1).sub(p0);
+    const dist = _envSegDir.length();
+    if (dist < 1e-6) return null;
+    _envSegDir.multiplyScalar(1 / dist);
+    _envRaycaster.set(p0, _envSegDir);
+    _envRaycaster.near = 0;
+    // Reach a few metres past the AABB impact: this level's colliders don't always
+    // sit on the visible surface (e.g. a platform collider that blocks in front of
+    // the wall behind it), so we search a bit further for the real mesh the shot
+    // was heading into.
+    _envRaycaster.far = dist + 3.0;
+    _envRayHits.length = 0;
+    _envRaycaster.intersectObject(ARENA.group, true, _envRayHits);
+    for (let i = 0; i < _envRayHits.length; i++) {
+        const hit = _envRayHits[i];
+        const obj = hit.object;
+        // Solid, front-facing surfaces only: skip outlines (BackSide), transparent
+        // glow/neon, and any splats already stuck to the wall.
+        if (!obj.isMesh || obj.name === 'franken_impact_decal') continue;
+        const mat = Array.isArray(obj.material) ? obj.material[0] : obj.material;
+        if (!mat || mat.transparent || mat.side === THREE.BackSide) continue;
+        _envSurface.point.copy(hit.point);
+        if (hit.face) {
+            _envNormalMatrix.getNormalMatrix(obj.matrixWorld);
+            _envSurface.normal.copy(hit.face.normal).applyMatrix3(_envNormalMatrix).normalize();
+        } else {
+            _envSurface.normal.copy(_envSegDir).multiplyScalar(-1);
+        }
+        // Orient outward, back toward the shooter.
+        if (_envSurface.normal.dot(_envSegDir) > 0) _envSurface.normal.multiplyScalar(-1);
+        return _envSurface;
+    }
+    return null;
 }
 
 function updateProjectiles(dt, enemies, onHitCallback) {
@@ -1026,56 +1176,107 @@ function updateProjectiles(dt, enemies, onHitCallback) {
             }
         });
 
-        let groundHit = false;
+        // Resolve the nearest world surface hit along this frame's travel segment
+        // (prevPos -> pos). The ground plane and every wall are tested
+        // parametrically and the closest one wins, so a shot angled down the room
+        // lands its decal on the FLOOR (flat) when the bolt reaches the ground
+        // first, and only decals a WALL when the bolt actually reaches a wall
+        // above the floor. Previously the wall test ran on the bolt's end-point,
+        // so shallow "at the floor" shots left a decal standing vertically on the
+        // far wall instead of lying flat on the ground.
         const groundY = 0.035;
+        let bestT = Infinity;
+        let groundHit = false;
+        let wallHit = false;
+        let hitWall = null;
+
+        // Ground plane crossing (only while descending through it this frame).
         if (!hit && proj.userData.velocity.y < -0.001 &&
             _projectilePrevPosition.y > groundY && proj.position.y <= groundY) {
             const denom = _projectilePrevPosition.y - proj.position.y;
-            const t = denom > 0.0001 ? (_projectilePrevPosition.y - groundY) / denom : 1;
-            _groundImpactPoint.lerpVectors(_projectilePrevPosition, proj.position, Math.max(0, Math.min(1, t)));
-            _groundImpactPoint.y = groundY;
+            const tGround = denom > 0.0001 ? (_projectilePrevPosition.y - groundY) / denom : 1;
+            bestT = Math.max(0, Math.min(1, tGround));
             groundHit = true;
         }
 
-        if (groundHit && proj.userData.weaponIndex === 0) {
-            spawnFrankenImpactDecal(_groundImpactPoint, {
-                normal: _groundImpactNormal,
-                scale: 0.62,
-            });
-        }
-
-        // Check collision with walls — rockets detonate on wall impact (explosion + AoE).
-        let wallHit = false;
-        let hitWall = null;
-        if (!hit && !groundHit) {
-            ARENA.walls.forEach(wall => {
-                if (wallHit) return;
-                if (proj.position.x > wall.minX && proj.position.x < wall.maxX &&
-                    proj.position.z > wall.minZ && proj.position.z < wall.maxZ &&
-                    proj.position.y > (wall.minY ?? 0) &&
-                    proj.position.y < wall.maxY) {
-                    wallHit = true;
+        // Wall entry via segment/AABB — closer wall than the ground wins.
+        if (!hit) {
+            for (let w = 0; w < ARENA.walls.length; w++) {
+                const wall = ARENA.walls[w];
+                const tWall = wall.shape === 'cylinder'
+                    ? segmentCylinderEntryT(_projectilePrevPosition, proj.position, wall)
+                    : segmentAABBEntryT(_projectilePrevPosition, proj.position, wall);
+                if (tWall !== null && tWall < bestT) {
+                    bestT = tWall;
                     hitWall = wall;
+                    wallHit = true;
+                    groundHit = false;
                 }
-            });
+            }
         }
 
-        if (wallHit && hitWall && proj.userData.weaponIndex === 0) {
-            const impact = getWallImpactSurface(proj.position, hitWall);
-            spawnFrankenImpactDecal(impact.point, {
-                normal: impact.normal,
-                scale: 0.58,
-            });
+        if (groundHit) {
+            _groundImpactPoint.lerpVectors(_projectilePrevPosition, proj.position, bestT);
+            _groundImpactPoint.y = groundY;
+            if (proj.userData.weaponIndex === 0) {
+                spawnFrankenImpactDecal(_groundImpactPoint, {
+                    normal: _groundImpactNormal,
+                    scale: 0.62,
+                });
+            }
         }
 
-        if (wallHit && proj.userData.projectileType === 'rocket') {
-            detonateProjectile(proj, enemies, onHitCallback);
+        if (wallHit && hitWall) {
+            _wallImpactHitPoint.lerpVectors(_projectilePrevPosition, proj.position, bestT);
+            if (proj.userData.weaponIndex === 0) {
+                // Prefer the true environment-mesh surface (accurate point + normal
+                // on slanted/round geometry); fall back to the collider face/side if
+                // the ray finds nothing solid.
+                const impact = raycastEnvironmentSurface(_projectilePrevPosition, proj.position)
+                    || (hitWall.shape === 'cylinder'
+                        ? getCylinderImpactSurface(_wallImpactHitPoint, hitWall)
+                        : getWallImpactSurface(_wallImpactHitPoint, hitWall));
+                spawnFrankenImpactDecal(impact.point, {
+                    normal: impact.normal,
+                    scale: 0.58,
+                });
+            }
+            // Rockets detonate on wall impact (explosion + AoE).
+            if (proj.userData.projectileType === 'rocket') {
+                detonateProjectile(proj, enemies, onHitCallback);
+            }
         }
 
         if (hit || wallHit || groundHit) {
             deactivateProjectile(proj);
         }
     });
+
+    updateBulletLights();
+}
+
+// Park the fixed bullet-light pool on the nearest in-flight Franken bolts (the
+// ones that read as lit); unused lights sit at intensity 0. Light COUNT never
+// changes, so no shader recompiles.
+function updateBulletLights() {
+    _bulletLightCandidates.length = 0;
+    for (let i = 0; i < projectiles.length; i++) {
+        const p = projectiles[i];
+        if (p.userData.active && p.userData.spriteBullet) _bulletLightCandidates.push(p);
+    }
+    if (_bulletLightCandidates.length > MAX_BULLET_LIGHTS) {
+        _bulletLightCandidates.sort((a, b) =>
+            a.position.distanceToSquared(camera.position) - b.position.distanceToSquared(camera.position));
+    }
+    for (let i = 0; i < MAX_BULLET_LIGHTS; i++) {
+        const bullet = _bulletLightCandidates[i];
+        if (bullet) {
+            bulletLights[i].position.copy(bullet.position);
+            bulletLights[i].intensity = BULLET_LIGHT_INTENSITY;
+        } else {
+            bulletLights[i].intensity = 0;
+        }
+    }
 }
 
 function deactivateProjectile(proj) {
