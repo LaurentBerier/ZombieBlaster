@@ -7,6 +7,8 @@ __pycache__/
 
 # Local Claude Code settings
 .claude/settings.local.json
+# Auto-generated preview config; points at an ephemeral per-session path
+.claude/launch.json
 
 # OS / editor noise
 .DS_Store
