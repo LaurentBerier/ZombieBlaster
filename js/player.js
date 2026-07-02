@@ -289,6 +289,21 @@ function updatePlayer(dt, aliveEnemies) {
     ARENA.walls.forEach(wall => {
         if (wall.isPlatform) return; // Handle platforms separately
 
+        // Round props (tanks/barrels): circle-vs-circle slide around the footprint.
+        if (wall.shape === 'cylinder') {
+            if (newPos.y <= wall.minY || newPos.y - playerHeight >= wall.maxY) return;
+            const dx = newPos.x - wall.cx;
+            const dz = newPos.z - wall.cz;
+            const distSq = dx * dx + dz * dz;
+            const reach = playerRadius + wall.radius;
+            if (distSq < reach * reach && distSq > 0.0001) {
+                const dist = Math.sqrt(distSq);
+                newPos.x = wall.cx + (dx / dist) * reach;
+                newPos.z = wall.cz + (dz / dist) * reach;
+            }
+            return;
+        }
+
         // Check horizontal collision
         const closestX = Math.max(wall.minX, Math.min(newPos.x, wall.maxX));
         const closestZ = Math.max(wall.minZ, Math.min(newPos.z, wall.maxZ));

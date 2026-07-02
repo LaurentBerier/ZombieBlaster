@@ -194,6 +194,12 @@ async function buildArena(preloadedLevelData) {
     }
 
     scene.add(arenaGroup);
+    // Exposed so impact FX can raycast the real environment geometry (not just the
+    // AABB colliders) when placing wall/prop splats.
+    ARENA.group = arenaGroup;
+    // Fit colliders to the actual visible props now that everything is placed.
+    arenaGroup.updateMatrixWorld(true);
+    generatePropColliders(arenaGroup);
     return levelData;
 }
 
@@ -429,6 +435,60 @@ function addEnvironmentalProps(parent) {
     parent.add(propsGroup);
 }
 
+// Decide a collider shape for a custom prop from its asset filename. Floors and
+// ceilings are walkable/overhead and passages (doors/arches/entrances) must stay
+// open, so those get none; round props (tanks, barrels) get a cylinder; anything
+// else solid (walls, machinery) gets a box. Unknown names default to a box.
+function classifyPropCollider(asset) {
+    const a = (asset || '').toLowerCase();
+    if (/floor|cieling|ceiling/.test(a)) return 'skip';
+    // "entran" (not "entranc") so the misspelled "Entranec_cement" entrance frames
+    // are recognised as passages too — a box collider there seals the doorway.
+    if (/door|arch|entran|frame|gate|portal/.test(a)) return 'skip';
+    if (/tank|barrel/.test(a)) return 'cylinder';
+    return 'box';
+}
+
+// Fit a collider to each solid custom prop's live world bounds (matrices must be
+// current — call after the arena is in the scene). Box props push an AABB;
+// tanks/barrels push a vertical cylinder so shots and bodies follow the round
+// footprint. Procedural props (vats/pumps/pipes) are untagged and skipped — they
+// already pushed their own colliders in addEnvironmentalProps().
+function generatePropColliders(arenaGroup) {
+    const propsGroup = arenaGroup.getObjectByName('props');
+    if (!propsGroup) return;
+    const box = new THREE.Box3();
+    const size = new THREE.Vector3();
+    const center = new THREE.Vector3();
+    let boxes = 0;
+    let cylinders = 0;
+    propsGroup.children.forEach(root => {
+        const kind = root.userData && root.userData.colliderKind;
+        if (!kind || kind === 'skip') return;
+        box.setFromObject(root);
+        if (box.isEmpty()) return;
+        box.getSize(size);
+        box.getCenter(center);
+        if (kind === 'cylinder') {
+            ARENA.walls.push({
+                shape: 'cylinder',
+                cx: center.x, cz: center.z,
+                radius: Math.max(0.1, (size.x + size.z) / 4),
+                minY: box.min.y, maxY: box.max.y,
+            });
+            cylinders++;
+        } else {
+            ARENA.walls.push({
+                minX: box.min.x, maxX: box.max.x,
+                minY: box.min.y, maxY: box.max.y,
+                minZ: box.min.z, maxZ: box.max.z,
+            });
+            boxes++;
+        }
+    });
+    console.log(`[colliders] fitted ${boxes} box + ${cylinders} cylinder colliders to visible props`);
+}
+
 function addCustomProps(parent) {
     let added = 0;
     let skipped = 0;
@@ -444,6 +504,9 @@ function addCustomProps(parent) {
         const url = customPropUrl(def.asset);
         const root = new THREE.Group();
         root.name = def.id || 'custom';
+        // Tag how this prop should be collided so generatePropColliders() can fit
+        // a shape to it later (once world matrices are final).
+        root.userData.colliderKind = classifyPropCollider(def.asset);
         root.position.set(def.x ?? 0, def.y ?? 0, def.z ?? 0);
         root.rotation.set(def.rx ?? 0, def.ry ?? 0, def.rz ?? 0);
         // Per-axis scale (sx/sy/sz) wins over the uniform `scale` so non-uniform
