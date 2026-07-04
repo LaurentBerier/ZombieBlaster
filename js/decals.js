@@ -110,6 +110,13 @@ const DECAL_TYPE_DEFS = {
         opacity: 1.0,
         glow: 0.15,
     },
+    plasma: {
+        // Blue energy splat (Soda Laser) — bright azure core, deep-blue rim.
+        assetIds: ['decal_plasma_splat'],
+        procedural: { core: '80,150,255', edge: '24,60,150', variants: 2 },
+        opacity: 1.0,
+        glow: 0.3,
+    },
 };
 DECAL_TYPE_DEFS.acid = DECAL_TYPE_DEFS.toxic;
 

@@ -183,15 +183,24 @@ const ENEMY_TYPES = {
     FAST_ZOMBIE: 'fast_zombie',
     TANK_ZOMBIE: 'tank_zombie',
     BOSS: 'boss',
+    // Zombie_4 wave-boss — closes out every wave from wave 2 on.
+    ZOMBIE_4: 'zombie_4',
+    // Zombie_5 debut boss — closes out wave 1 (the first boss).
+    ZOMBIE_5: 'zombie_5',
 };
 
 // Per-type GLB asset ids. Variants without attack/death entries fall back to
 // looping the walk clip during attack and to the procedural death squash.
 const ENEMY_ASSETS = {
     [ENEMY_TYPES.ZOMBIE]:      { walk: 'enemy_zombie', attack: 'enemy_zombie_attack', death: 'enemy_zombie_death' },
-    [ENEMY_TYPES.ZOMBIE_2]:    { walk: 'enemy_zombie_2', attack: 'enemy_zombie_2_attack', death: 'enemy_zombie_2_death' },
+    // ZOMBIE_2 wears the Zombie_3 art, animated by Zombie_3's own walk/attack/death clips.
+    [ENEMY_TYPES.ZOMBIE_2]:    { walk: 'enemy_zombie_3', attack: 'enemy_zombie_3_attack', death: 'enemy_zombie_3_death' },
     [ENEMY_TYPES.FAST_ZOMBIE]: { walk: 'enemy_zombie', attack: 'enemy_zombie_attack', death: 'enemy_zombie_death' },
     [ENEMY_TYPES.TANK_ZOMBIE]: { walk: 'enemy_zombie', attack: 'enemy_zombie_attack', death: 'enemy_zombie_death' },
+    // ZOMBIE_4 wave-boss: its own Zombie_4 walk/attack/death clips.
+    [ENEMY_TYPES.ZOMBIE_4]:    { walk: 'enemy_zombie_4', attack: 'enemy_zombie_4_attack', death: 'enemy_zombie_4_death' },
+    // ZOMBIE_5 debut boss (wave 1): its own Zombie_5 walk/attack/death clips.
+    [ENEMY_TYPES.ZOMBIE_5]:    { walk: 'enemy_zombie_5', attack: 'enemy_zombie_5_attack', death: 'enemy_zombie_5_death' },
 };
 
 // Wave management
@@ -200,6 +209,12 @@ const waveState = {
     enemiesRemaining: 0,
     enemiesSpawned: 0,
     enemiesToSpawn: 0,
+    // enemiesToSpawn split into the regular horde plus the wave-boss(es) that
+    // spawn once the horde is out (see startWave / spawnWaveEnemy). bossType is
+    // which boss closes the wave — Zombie_5 on wave 1, Zombie_4 from wave 2 on.
+    regularToSpawn: 0,
+    bossToSpawn: 0,
+    bossType: null,
     spawnTimer: 0,
     spawnInterval: 1.5,
     waveActive: false,
@@ -219,6 +234,8 @@ const waveState = {
 function applyGLBToEnemy(enemy) {
     const assetIds = ENEMY_ASSETS[enemy.type];
     if (!assetIds) return false;
+    // The walk GLB doubles as the mesh source — it ships the skinned mesh,
+    // skeleton and walk clip together.
     const model = cloneAsset(assetIds.walk);
     if (!model) return false;
 
@@ -284,15 +301,16 @@ function applyGLBToEnemy(enemy) {
         }
     });
 
-    // Cache the "Head" bone (shared name across Zombie_1 and Zombie_2 skeletons)
+    // Cache the "Head" bone (every zombie skeleton uses this bone name)
     // so popups can anchor to the live world-space head position.
     enemy.headBone = model.getObjectByName('Head') || null;
 
     // Set up animation mixer if the asset brought skeletal clips along with it.
     // Each enemy needs its own mixer bound to its own cloned skeleton, which
-    // cloneAsset handled via SkeletonUtils. Walk and attack clips live in
-    // separate GLBs but share the same Zombie_1 skeleton — three.js binds
-    // clip tracks to bones by name, so playing both on this mixer works.
+    // cloneAsset handled via SkeletonUtils. Walk, attack and death clips live in
+    // separate GLBs but share the same per-character skeleton — three.js binds
+    // clip tracks to bones by name, so all three play on this mixer. Each enemy
+    // type uses clips authored for its own rig, so bind poses always match.
     const walkClips = getAssetAnimations(assetIds.walk);
     const attackClips = assetIds.attack ? getAssetAnimations(assetIds.attack) : [];
     if (walkClips.length > 0) {
@@ -301,8 +319,10 @@ function applyGLBToEnemy(enemy) {
         const walkClip = walkClips[0];
         const walkAction = enemy.mixer.clipAction(walkClip);
         walkAction.setLoop(THREE.LoopRepeat, Infinity);
-        // 1.3 → 30% faster than authored so the unsteady walk has a touch more urgency.
-        walkAction.timeScale = 1.3;
+        // Per-enemy walk playback speed — 1.3 (default) is 30% faster than authored
+        // for the unsteady shamble; the boss uses a slower value for a heavy lumber
+        // while its locomotion velocity (enemy.speed) stays unchanged.
+        walkAction.timeScale = enemy.walkAnimScale;
         // Random phase offset so a crowd of zombies doesn't march in lockstep.
         walkAction.time = Math.random() * walkClip.duration;
         walkAction.play();
@@ -446,14 +466,28 @@ function createEnemyObject() {
         attackRange: 1.8,
         attackCooldown: 1.0,
         attackTimer: 0,
+        // Telegraphed strike: when > 0 the killing blow lands `attackWindup`s after
+        // the swing begins (the boss), not instantly. windupTimer counts it down;
+        // -1 means "not mid-swing".
+        attackWindup: 0,
+        windupTimer: -1,
         hitRadius: 0.7,
+        // Hit-volume centre height; recomputed from body scale on every spawn so
+        // tall enemies (bosses) are hittable head-to-toe. ×2 = body top (FX clamp).
+        hitCenterY: 1.0,
         scoreValue: 100,
 
         // Squash-and-stretch animation state
         animState: 'idle',
         animTimer: 0,
         walkCycle: 0,
+        // Walk-clip playback speed (timeScale). Default matches the shambling
+        // horde; the boss overrides it to a slower, heavier lumber.
+        walkAnimScale: 1.3,
         hitFlashTimer: 0,
+        // Multiplier on the on-hit squash — the boss uses a small value so it
+        // barely flinches and never breaks stride.
+        hitReactMult: 1,
         deathTimer: 0,
         squashScale: new THREE.Vector3(1, 1, 1),
         // Target scale for bodyGroup restore after squash (overridden when GLB is used)
@@ -472,6 +506,9 @@ function createEnemyObject() {
         // Element impact reaction state.
         statusEffect: { type: null, duration: 0, dpsTimer: 0, dps: 0, weaponIndex: 0 },
         knockbackVel: new THREE.Vector3(),
+        // Incoming-knockback multiplier (0 = immune, so the boss shrugs off shots
+        // and keeps advancing instead of being staggered/juggled).
+        knockbackScale: 1,
         impactFlashColor: null,
         tintMaterials: [],
     };
@@ -494,6 +531,14 @@ function spawnEnemy(type, position) {
     enemy.deathTimer = 0;
     enemy.squashScale.set(1, 1, 1);
     enemy.attackTimer = 0;
+    // Reset per-type combat tunables to their defaults each spawn — the ZOMBIE_4
+    // boss overrides these, and pooled slots must not leak them to the next enemy.
+    enemy.attackRange = 1.8;
+    enemy.attackWindup = 0;
+    enemy.windupTimer = -1;
+    enemy.hitReactMult = 1;
+    enemy.knockbackScale = 1;
+    enemy.walkAnimScale = 1.3;
     enemy.useGLB = false;
     enemy.impactBones = [];
     enemy.statusEffect.type = null;
@@ -585,7 +630,39 @@ function spawnEnemy(type, position) {
             enemy.targetBodyScale.setScalar(2.5);
             setEnemyColors(enemy, COLORS.hotPink, COLORS.magenta);
             break;
+
+        case ENEMY_TYPES.ZOMBIE_4:
+        case ENEMY_TYPES.ZOMBIE_5: {
+            // Wave-boss: big, tanky and slow, with a telegraphed one-shot melee.
+            // ZOMBIE_5 is the wave-1 debut boss; ZOMBIE_4 takes over from wave 2.
+            // Both share these stats; HP scales with the wave. Tune to taste.
+            enemy.type = type;
+            enemy.health = 400 + waveState.currentWave * 50;
+            enemy.maxHealth = enemy.health;
+            enemy.speed = 1.5;
+            enemy.damage = 9999;               // a connecting hit kills the player
+            enemy.attackRange = 2.2;           // longer reach to match its bulk
+            enemy.hitRadius = 1.2;
+            enemy.scoreValue = 1000;
+            // The strike lands 1.2s after the attack anim starts — and only if the
+            // player is still in range, so a well-timed dash out escapes it.
+            enemy.attackWindup = 1.2;
+            enemy.hitReactMult = 0.25;         // barely flinches when shot
+            enemy.knockbackScale = 0;          // immune to knockback — keeps advancing
+            enemy.walkAnimScale = 0.6;         // slow, heavy lumber — velocity unchanged
+            // Fixed oversized scale (no jitter) so it reads as a boss.
+            const s = 1.8;
+            enemy.bodyGroup.scale.setScalar(s);
+            enemy.targetBodyScale.setScalar(s);
+            break;
+        }
     }
+
+    // Hit-volume centre tracks the enemy's height (≈ TARGET_HEIGHT × body scale),
+    // so shots register across the whole body — vital for the big bosses whose heads
+    // sit far above the old fixed y=1 centre. ×2 gives the body top used to clamp
+    // impact FX/decals, so head shots stamp the head instead of the torso.
+    enemy.hitCenterY = ZOMBIE_TARGET_HEIGHT * enemy.targetBodyScale.y / 2;
 
     // Apply real GLB model if loaded (replaces placeholder geometry).
     // Bosses have no GLB asset, so they keep the placeholder geometry.
@@ -666,12 +743,13 @@ function updateEnemies(dt, onAttackPlayer, onStatusKill) {
         }
 
         // Hit flash — squash from targetBodyScale (stable) so repeated hits don't drift.
+        // hitReactMult scales the squash per enemy — the boss barely twitches.
         if (enemy.hitFlashTimer > 0) {
             enemy.hitFlashTimer -= dt;
-            const hitT = enemy.hitFlashTimer / 0.15;
-            enemy.bodyGroup.scale.x = enemy.targetBodyScale.x * (1 + hitT * 0.15);
-            enemy.bodyGroup.scale.y = enemy.targetBodyScale.y * (1 - hitT * 0.1);
-            enemy.bodyGroup.scale.z = enemy.targetBodyScale.z * (1 + hitT * 0.15);
+            const react = (enemy.hitFlashTimer / 0.15) * enemy.hitReactMult;
+            enemy.bodyGroup.scale.x = enemy.targetBodyScale.x * (1 + react * 0.15);
+            enemy.bodyGroup.scale.y = enemy.targetBodyScale.y * (1 - react * 0.1);
+            enemy.bodyGroup.scale.z = enemy.targetBodyScale.z * (1 + react * 0.15);
         } else {
             // Restore scale toward target (GLB enemies use 1,1,1; placeholders use type-based)
             enemy.bodyGroup.scale.lerp(enemy.targetBodyScale, dt * 8);
@@ -732,6 +810,13 @@ function updateEnemies(dt, onAttackPlayer, onStatusKill) {
         );
         const dist = toPlayer.length();
 
+        // A telegraphed attacker (the boss) abandons its swing the moment the
+        // target leaves reach — that gap is the player's escape window. (It's
+        // knockback-immune, so a stagger never interrupts it.)
+        if (enemy.attackWindup > 0 && dist > enemy.attackRange) {
+            enemy.windupTimer = -1;
+        }
+
         // Status-based speed modifier.
         const speedMult = STATUS_SPEED_MULT[status.type] ?? 1.0;
         const effectiveSpeed = enemy.speed * speedMult;
@@ -764,13 +849,20 @@ function updateEnemies(dt, onAttackPlayer, onStatusKill) {
             }
         }
 
-        if (dist > enemy.attackRange && !stunned) {
+        // Chasing = closing on the player (not in melee range, not staggered).
+        const chasing = dist > enemy.attackRange && !stunned;
+        // Snapshot position so we can face the *actual* travel direction after the
+        // collision passes below slide us around, rather than straight at the player.
+        const preMoveX = enemy.root.position.x;
+        const preMoveZ = enemy.root.position.z;
+
+        if (chasing) {
             // Move towards player
             toPlayer.normalize();
             enemy.root.position.x += toPlayer.x * effectiveSpeed * dt;
             enemy.root.position.z += toPlayer.z * effectiveSpeed * dt;
 
-            // Face player
+            // Face player (baseline; refined to actual travel direction below).
             enemy.root.rotation.y = Math.atan2(toPlayer.x, toPlayer.z);
 
             // Walk animation — skeletal clip drives GLB enemies; placeholders still
@@ -789,21 +881,40 @@ function updateEnemies(dt, onAttackPlayer, onStatusKill) {
                 });
             }
         } else if (!stunned) {
-            // Attack player
-            enemy.attackTimer -= dt;
-            if (enemy.attackTimer <= 0 && PLAYER.isAlive) {
-                onAttackPlayer(enemy.damage);
-                enemy.attackTimer = enemy.attackCooldown;
+            if (enemy.attackWindup > 0) {
+                // Telegraphed strike (boss): the attack clip is already cross-fading
+                // in (above). Keep facing the player and wind up; the killing blow
+                // only lands if they're still in range when the timer runs out — so
+                // the attack animation reads as a warning the player can dash out of.
+                enemy.root.rotation.y = Math.atan2(toPlayer.x, toPlayer.z);
+                if (enemy.windupTimer < 0) {
+                    // Swing just started — begin the wind-up and snarl once.
+                    enemy.windupTimer = enemy.attackWindup;
+                    playGrowl({ aggressive: true, volume: Math.max(0.4, 1 - dist / 30) });
+                } else {
+                    enemy.windupTimer -= dt;
+                    if (enemy.windupTimer <= 0 && PLAYER.isAlive) {
+                        onAttackPlayer(enemy.damage);
+                        enemy.windupTimer = enemy.attackWindup; // (player is down now)
+                    }
+                }
+            } else {
+                // Instant melee — regular zombies chip away on their cooldown.
+                enemy.attackTimer -= dt;
+                if (enemy.attackTimer <= 0 && PLAYER.isAlive) {
+                    onAttackPlayer(enemy.damage);
+                    enemy.attackTimer = enemy.attackCooldown;
 
-                // Attack animation - lunge forward
-                enemy.bodyGroup.scale.z = enemy.squashScale.z * 1.2;
-                enemy.bodyGroup.scale.x = enemy.squashScale.x * 0.85;
+                    // Attack animation - lunge forward
+                    enemy.bodyGroup.scale.z = enemy.squashScale.z * 1.2;
+                    enemy.bodyGroup.scale.x = enemy.squashScale.x * 0.85;
 
-                // Aggressive snarl on the lunge (occasional, so a packed melee
-                // ring doesn't drown the mix). Attacks happen point-blank, so
-                // these are loud — dist falloff barely trims them.
-                if (Math.random() < 0.5) {
-                    playGrowl({ aggressive: true, volume: Math.max(0.3, 1 - dist / 30) });
+                    // Aggressive snarl on the lunge (occasional, so a packed melee
+                    // ring doesn't drown the mix). Attacks happen point-blank, so
+                    // these are loud — dist falloff barely trims them.
+                    if (Math.random() < 0.5) {
+                        playGrowl({ aggressive: true, volume: Math.max(0.3, 1 - dist / 30) });
+                    }
                 }
             }
         }
@@ -825,6 +936,19 @@ function updateEnemies(dt, onAttackPlayer, onStatusKill) {
         // inter-enemy separation can all freely shove the enemy first; the
         // wall resolve has the final say.
         resolveEnemyWallCollision(enemy);
+
+        // Face the direction actually travelled this frame — chase intent minus
+        // whatever the wall slide / crowd separation deflected — so a zombie
+        // sliding along a wall points along it instead of moonwalking sideways
+        // while still aimed at the player. A fully-blocked zombie barely moves and
+        // keeps the straight-at-player heading set during the move step.
+        if (chasing) {
+            const dx = enemy.root.position.x - preMoveX;
+            const dz = enemy.root.position.z - preMoveZ;
+            if (dx * dx + dz * dz > 1e-5) {
+                enemy.root.rotation.y = Math.atan2(dx, dz);
+            }
+        }
     });
 
     // Ambient horde growls — on a randomized cadence, one random living zombie
@@ -863,9 +987,10 @@ function damageEnemy(enemy, damage, opts = {}) {
     }
 
     // Knockback (skip for DoT ticks so burn doesn't keep pushing enemies back).
-    if (!opts.fromDoT && opts.knockbackDir && opts.knockbackStrength > 0) {
+    // knockbackScale 0 (the boss) shrugs it off entirely so it never staggers.
+    if (!opts.fromDoT && opts.knockbackDir && opts.knockbackStrength > 0 && enemy.knockbackScale > 0) {
         enemy.knockbackVel.copy(opts.knockbackDir).setY(0).normalize()
-            .multiplyScalar(opts.knockbackStrength);
+            .multiplyScalar(opts.knockbackStrength * enemy.knockbackScale);
     }
 
     // Status effect application — on same type, take max remaining duration.
@@ -946,8 +1071,18 @@ function startWave(onWaveStart, onBossWave) {
     waveState.enemiesSpawned = 0;
     waveState.spawnTimer = 0.5;
 
-    // Escalating difficulty
-    waveState.enemiesToSpawn = Math.min(5 + wave * 3, 40);
+    // Escalating difficulty: the regular horde, then the wave's boss(es) close it
+    // out. Wave 1 debuts the single Zombie_5 boss; from wave 2 the Zombie_4 bosses
+    // take over and scale — 1 on wave 2, then +1 each wave after.
+    waveState.regularToSpawn = Math.min(5 + wave * 3, 40);
+    if (wave === 1) {
+        waveState.bossToSpawn = 1;
+        waveState.bossType = ENEMY_TYPES.ZOMBIE_5;
+    } else {
+        waveState.bossToSpawn = wave - 1;
+        waveState.bossType = ENEMY_TYPES.ZOMBIE_4;
+    }
+    waveState.enemiesToSpawn = waveState.regularToSpawn + waveState.bossToSpawn;
     waveState.spawnInterval = Math.max(0.3, 1.5 - wave * 0.08);
     waveState.enemiesRemaining = waveState.enemiesToSpawn;
 
@@ -960,9 +1095,15 @@ function startWave(onWaveStart, onBossWave) {
 }
 
 function spawnWaveEnemy() {
-    // Round-robin through all spawn points so every spawner gets used each wave
     const points = ARENA.spawnPoints;
-    const bestSpawn = points[waveState.enemiesSpawned % points.length];
+    const isBoss = waveState.enemiesSpawned >= waveState.regularToSpawn;
+
+    // Bosses are big, so they always spawn at the arena spawner (the last placed
+    // enemy spawn — out in the open arena) instead of round-robining onto the tight
+    // corridor spawner. Regular enemies round-robin through every spawner.
+    const bestSpawn = isBoss
+        ? points[points.length - 1]
+        : points[waveState.enemiesSpawned % points.length];
 
     // Add some randomness to spawn position
     const spawnPos = {
@@ -972,18 +1113,24 @@ function spawnWaveEnemy() {
 
     // Determine enemy type
     let type = ENEMY_TYPES.ZOMBIE;
-    const rand = Math.random();
     const wave = waveState.currentWave;
 
-    if (waveState.bossWave && !waveState.bossSpawned) {
-        type = ENEMY_TYPES.BOSS;
-        waveState.bossSpawned = true;
-    } else if (wave >= 3 && rand < 0.15) {
-        type = ENEMY_TYPES.TANK_ZOMBIE;
-    } else if (wave >= 2 && rand < 0.35) {
-        type = ENEMY_TYPES.FAST_ZOMBIE;
-    } else if (rand < 0.7) {
-        type = ENEMY_TYPES.ZOMBIE_2;
+    if (isBoss) {
+        // Horde is fully out — the wave's boss(es) arrive to end the wave
+        // (Zombie_5 on wave 1, Zombie_4 from wave 2 on).
+        type = waveState.bossType;
+    } else {
+        const rand = Math.random();
+        if (waveState.bossWave && !waveState.bossSpawned) {
+            type = ENEMY_TYPES.BOSS;
+            waveState.bossSpawned = true;
+        } else if (wave >= 3 && rand < 0.15) {
+            type = ENEMY_TYPES.TANK_ZOMBIE;
+        } else if (wave >= 2 && rand < 0.35) {
+            type = ENEMY_TYPES.FAST_ZOMBIE;
+        } else if (rand < 0.7) {
+            type = ENEMY_TYPES.ZOMBIE_2;
+        }
     }
 
     const enemy = spawnEnemy(type, spawnPos);
@@ -1017,6 +1164,9 @@ function resetEnemies() {
     waveState.enemiesRemaining = 0;
     waveState.enemiesSpawned = 0;
     waveState.enemiesToSpawn = 0;
+    waveState.regularToSpawn = 0;
+    waveState.bossToSpawn = 0;
+    waveState.bossType = null;
     waveState.waveActive = false;
     waveState.waveDelayTimer = 2.0;
     waveState.bossWave = false;
@@ -1028,8 +1178,8 @@ function resetEnemies() {
 
 // World-space position of the enemy's head — anchor for HUD popups so the
 // score / damage text sits just above the head and follows the skeletal
-// animation. Uses the cached "Head" bone when present (Zombie_1 / Zombie_2
-// GLBs); falls back to a procedural offset for bosses (no GLB).
+// animation. Uses the cached "Head" bone when present (all zombie GLBs share
+// it); falls back to a procedural offset for bosses (no GLB).
 function getEnemyHeadWorldPos(enemy, target) {
     if (enemy.headBone) {
         enemy.headBone.getWorldPosition(target);

@@ -3,7 +3,7 @@
 // Comic-book popups, particles, muzzle flash
 // ============================================
 
-import { scene, camera, COLORS, createToonMaterial } from './scene.js';
+import { scene, camera, COLORS, createToonMaterial, makeChannelRotatedTexture } from './scene.js';
 import { getPreloadedTexture } from './assetLoader.js';
 
 // Comic-book popup pool (POW, ZAP, SPLAT, BOOM)
@@ -67,6 +67,9 @@ const FRANKEN_DECAL_TEXTURES = [
     { id: 'fx_franken_decal_2', url: 'assets/FX/Blood_Decal_2.png', aspect: 500 / 463 },
 ];
 let frankenDecalTextures = [];
+// Blue (RGB-rotated) variants of the environment-splat textures, built lazily
+// the first time a blue-style weapon (Soda Laser) splats a wall/floor.
+let frankenDecalTexturesBlue = [];
 
 // Green blood impact atlas: 8 frames in a 4x2 sheet.
 const greenBloodImpacts = [];
@@ -99,15 +102,25 @@ function configureTransparentTexture(texture) {
     }
 }
 
-function ensureFrankenDecalTextures() {
-    if (frankenDecalTextures.length > 0) return frankenDecalTextures;
-    const loader = new THREE.TextureLoader();
-    frankenDecalTextures = FRANKEN_DECAL_TEXTURES.map(def => {
-        const texture = getPreloadedTexture(def.id) || loader.load(def.url);
-        configureTransparentTexture(texture);
-        return { ...def, texture };
-    });
-    return frankenDecalTextures;
+function ensureFrankenDecalTextures(blue = false) {
+    if (frankenDecalTextures.length === 0) {
+        const loader = new THREE.TextureLoader();
+        frankenDecalTextures = FRANKEN_DECAL_TEXTURES.map(def => {
+            const texture = getPreloadedTexture(def.id) || loader.load(def.url);
+            configureTransparentTexture(texture);
+            return { ...def, texture };
+        });
+    }
+    if (!blue) return frankenDecalTextures;
+
+    if (frankenDecalTexturesBlue.length === 0) {
+        frankenDecalTexturesBlue = frankenDecalTextures.map(def => {
+            const texture = makeChannelRotatedTexture(def.texture);
+            configureTransparentTexture(texture);
+            return { ...def, texture };
+        });
+    }
+    return frankenDecalTexturesBlue;
 }
 
 function createDownsampledFrameTexture(sourceTexture, atlas, frameIndex) {
@@ -599,7 +612,7 @@ function spawnGreenBloodImpact(position, options = {}) {
 }
 
 function spawnFrankenImpactDecal(position, options = {}) {
-    const textures = ensureFrankenDecalTextures();
+    const textures = ensureFrankenDecalTextures(options.blue);
     if (!position || textures.length === 0) return;
 
     while (frankenImpactDecals.length >= MAX_FRANKEN_IMPACT_DECALS) {

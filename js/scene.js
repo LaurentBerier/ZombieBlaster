@@ -107,6 +107,41 @@ function addOutline(parent, geometry, scale = 1.05) {
     return outline;
 }
 
+// Build a copy of a texture with its RGB channels rotated (R,G,B) -> (B,R,G),
+// so a green-dominant sprite (eg the liquid-bullet sheet, avg ~93,176,25) reads
+// as azure blue while its alpha, layout and UV animation are untouched. Lets us
+// recolour shared FX art blue without shipping a second asset. Same-origin
+// canvas read (no CORS taint); returns the source unchanged if its image isn't
+// decoded yet.
+function makeChannelRotatedTexture(srcTexture) {
+    const img = srcTexture && srcTexture.image;
+    if (!img || !img.width) return srcTexture;
+    const canvas = document.createElement('canvas');
+    canvas.width = img.width;
+    canvas.height = img.height;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0);
+    const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const d = data.data;
+    for (let i = 0; i < d.length; i += 4) {
+        const r = d[i], g = d[i + 1], b = d[i + 2];
+        d[i] = b; d[i + 1] = r; d[i + 2] = g; // green liquid -> blue liquid
+    }
+    ctx.putImageData(data, 0, 0);
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.wrapS = srcTexture.wrapS;
+    tex.wrapT = srcTexture.wrapT;
+    tex.repeat.copy(srcTexture.repeat);
+    tex.offset.copy(srcTexture.offset);
+    tex.minFilter = srcTexture.minFilter;
+    tex.magFilter = srcTexture.magFilter;
+    tex.generateMipmaps = srcTexture.generateMipmaps;
+    if ('colorSpace' in srcTexture) tex.colorSpace = srcTexture.colorSpace;
+    else if ('encoding' in srcTexture) tex.encoding = srcTexture.encoding;
+    tex.needsUpdate = true;
+    return tex;
+}
+
 export {
     scene, camera, renderer, clock,
     COLORS, NEON_PALETTE,
@@ -114,4 +149,5 @@ export {
     createToonMaterial,
     createOutlineMesh,
     addOutline,
+    makeChannelRotatedTexture,
 };

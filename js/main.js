@@ -632,7 +632,10 @@ function resolveImpactDirection(hitContext) {
 // (particles, green blood flash, splashes). The DecalManager does its own,
 // finer projection (nearest bone / mesh raycast) for the stamped decal.
 function projectEnemyImpact(enemy, fallbackPoint, impactDir) {
-    const bodyY = Math.max(0.45, Math.min(fallbackPoint.y, enemy.type === 'boss' ? 3.0 : 1.8));
+    // Clamp to the enemy's body (feet..head-top ≈ 2× the hit-volume centre) so head
+    // shots on the big bosses stamp the head instead of being pulled down to the torso.
+    const bodyTop = (enemy.hitCenterY ?? 1.0) * 2;
+    const bodyY = Math.max(0.45, Math.min(fallbackPoint.y, bodyTop));
     _scratchFaceNormal.copy(impactDir).setY(0);
     if (_scratchFaceNormal.lengthSq() < 0.0001) {
         _scratchFaceNormal.copy(impactDir);

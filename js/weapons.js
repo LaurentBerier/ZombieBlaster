@@ -3,7 +3,7 @@
 // 4 weapons with rapid swapping, evolution
 // ============================================
 
-import { scene, camera, COLORS, createToonMaterial, addOutline } from './scene.js';
+import { scene, camera, COLORS, createToonMaterial, addOutline, makeChannelRotatedTexture } from './scene.js';
 import { ARENA } from './arena.js';
 import { PLAYER, keys, getPlayerForward, getPlayerPosition } from './player.js';
 import { weaponGroup } from './player.js';
@@ -45,6 +45,8 @@ const WEAPON_DEFS = [
         spread: 0.02,
         color: COLORS.magenta,
         projectileColor: COLORS.lime,
+        // Animated liquid sprite bullet + green environment splats.
+        bulletStyle: 'green',
         fx: {
             element: 'shock',
             knockback: 3.0,
@@ -115,7 +117,10 @@ const WEAPON_DEFS = [
         projectileRadius: 0.12,
         spread: 0.025,
         color: COLORS.cyan,
-        projectileColor: COLORS.cyan,
+        // Blue plasma bolts: same animated sprite as the Franken gun, recoloured
+        // blue, with matching blue impact FX/decals and bullet light.
+        projectileColor: 0x3a86ff,
+        bulletStyle: 'blue',
         fx: {
             element: 'acid',
             knockback: 0.8,
@@ -128,7 +133,7 @@ const WEAPON_DEFS = [
             acidPoolRadius: 1.2,
             acidPoolDuration: 2.0,
             acidPoolDps: 5,
-            decalType: 'acid',
+            decalType: 'plasma',
             decalScale: 0.9,
         },
         evolutionLevels: [
@@ -194,12 +199,15 @@ const weaponState = {
 const projectiles = [];
 const MAX_PROJECTILES = 80;
 
-// Fixed pool of green lights that ride the *nearest* in-flight Franken bolts. A
-// constant, always-present count (rather than one light per bullet toggled on/off)
-// keeps the scene's light total stable, which avoids the per-frame shader
-// recompiles that caused the first-few-seconds stutter — and caps the lighting cost.
+// Fixed pool of point lights that ride the *nearest* in-flight projectiles, each
+// tinted to the colour of the bolt it's riding so every gun's shots cast their own
+// coloured glow. A constant, always-present count (rather than one light per bullet
+// toggled on/off) keeps the scene's light total stable, which avoids the per-frame
+// shader recompiles that caused the first-few-seconds stutter — and caps the
+// lighting cost. Only the nearest MAX_BULLET_LIGHTS bolts are lit at once; raise it
+// for more simultaneous glows at a modest per-frame lighting cost.
 const bulletLights = [];
-const MAX_BULLET_LIGHTS = 5;
+const MAX_BULLET_LIGHTS = 8;
 const BULLET_LIGHT_INTENSITY = 6;
 const _bulletLightCandidates = [];
 const FRANKEN_BULLET_SPRITE = {
@@ -212,6 +220,13 @@ const FRANKEN_BULLET_SPRITE = {
 let frankenBulletTexture = null;
 let frankenBulletCoreMaterial = null;
 let frankenBulletGlowMaterial = null;
+// Blue variant of the sprite bullet (Soda Laser) — same animated sheet, RGB-rotated
+// to blue, with a blue additive glow. Shares the green sheet's frame animation (both
+// textures' UV offsets advance together in setFrankenBulletSpriteFrame).
+let sodaBulletTexture = null;
+let sodaBulletCoreMaterial = null;
+let sodaBulletGlowMaterial = null;
+const SODA_BULLET_GLOW = 0x3a86ff;
 let frankenBulletAnimTime = 0;
 let frankenBulletFrame = -1;
 const _wallImpactNormal = new THREE.Vector3();
@@ -339,11 +354,12 @@ function initWeapons() {
         projectiles.push(projRoot);
     }
 
-    // Constant-size green bullet-light pool. Always in the scene (stable light
-    // count) — intensity 0 parks the unused ones; updateProjectiles moves the live
-    // ones onto the nearest bolts each frame.
+    // Constant-size bullet-light pool. Always in the scene (stable light count) —
+    // intensity 0 parks the unused ones; updateBulletLights moves the live ones onto
+    // the nearest bolts each frame and tints each to that bolt's colour. Initial
+    // colour is a placeholder; it's overwritten per frame while a light is riding.
     for (let i = 0; i < MAX_BULLET_LIGHTS; i++) {
-        const light = new THREE.PointLight(0x2bff33, 0, 11, 2);
+        const light = new THREE.PointLight(0xffffff, 0, 11, 2);
         light.position.set(0, -1000, 0);
         scene.add(light);
         bulletLights.push(light);
@@ -382,6 +398,28 @@ function initFrankenBulletSpriteMaterials() {
         depthWrite: false,
         toneMapped: false,
     });
+
+    // Blue variant for the Soda Laser: RGB-rotate the sheet so the green liquid
+    // reads blue, then mirror the core/glow materials with a blue glow tint.
+    sodaBulletTexture = makeChannelRotatedTexture(frankenBulletTexture);
+    sodaBulletCoreMaterial = new THREE.SpriteMaterial({
+        map: sodaBulletTexture,
+        color: 0xffffff,
+        transparent: true,
+        opacity: 1.0,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false,
+    });
+    sodaBulletGlowMaterial = new THREE.SpriteMaterial({
+        map: sodaBulletTexture,
+        color: SODA_BULLET_GLOW,
+        transparent: true,
+        opacity: 0.45,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false,
+    });
 }
 
 function setFrankenBulletSpriteFrame(frame) {
@@ -389,10 +427,11 @@ function setFrankenBulletSpriteFrame(frame) {
     const wrapped = frame % FRANKEN_BULLET_SPRITE.frames;
     const col = wrapped % FRANKEN_BULLET_SPRITE.columns;
     const row = Math.floor(wrapped / FRANKEN_BULLET_SPRITE.columns);
-    frankenBulletTexture.offset.set(
-        col / FRANKEN_BULLET_SPRITE.columns,
-        1 - ((row + 1) / FRANKEN_BULLET_SPRITE.rows)
-    );
+    const ox = col / FRANKEN_BULLET_SPRITE.columns;
+    const oy = 1 - ((row + 1) / FRANKEN_BULLET_SPRITE.rows);
+    frankenBulletTexture.offset.set(ox, oy);
+    // Keep the blue (Soda) sheet on the same frame so both animate in lockstep.
+    if (sodaBulletTexture) sodaBulletTexture.offset.set(ox, oy);
     frankenBulletFrame = wrapped;
 }
 
@@ -756,7 +795,7 @@ function performHitscan(origin, dir, evolution, weapon, enemies, onHitCallback) 
 
         // Use bounding sphere check against enemy body center (not root at y=0)
         const enemyPos = enemy.root.position.clone();
-        enemyPos.y = 1.0; // Body center height for hit detection
+        enemyPos.y = enemy.hitCenterY ?? 1.0; // scaled body centre (tall bosses)
         const toEnemy = enemyPos.clone().sub(origin);
         const projLength = toEnemy.dot(dir);
 
@@ -765,8 +804,9 @@ function performHitscan(origin, dir, evolution, weapon, enemies, onHitCallback) 
         const closestPoint = origin.clone().add(dir.clone().multiplyScalar(projLength));
         const dist = closestPoint.distanceTo(enemyPos);
 
-        // Use generous vertical hit zone: check horizontal dist + clamped vertical
-        const hitHeight = enemy.type === 'boss' ? 3.0 : 1.8;
+        // Use generous vertical hit zone: half-height scales with the enemy so tall
+        // bosses are hittable up to the head (1.0 + 0.8 = the old 1.8 for normals).
+        const hitHeight = (enemy.hitCenterY ?? 1.0) + 0.8;
         const verticalDist = Math.abs(closestPoint.y - enemyPos.y);
         const horizontalDist = Math.sqrt(
             (closestPoint.x - enemyPos.x) ** 2 + (closestPoint.z - enemyPos.z) ** 2
@@ -833,21 +873,44 @@ function performHitscan(origin, dir, evolution, weapon, enemies, onHitCallback) 
 
 // Per-projectile-type physics + lifetime tuning. Pool geometry is shared;
 // we only change runtime scale, color, speed, gravity, lifetime, and trail.
-// Rocket: no gravity (flies flat) + long lifetime so it crosses the arena.
+// Rocket: no gravity (flies flat). Its lifetime only has to outlast one arena
+// crossing (22 m/s × 6 s = 132 m, far past any room) — it detonates on the wall
+// it reaches first. Keeping it short is important because rockets share the
+// 80-slot pool with every other gun: a missed rocket that escapes into open sky
+// holds its slot until this timeout, so an over-long value (was 30 s ⇒ up to
+// ~60 concurrent at max fire rate) starves the pool and silently chokes the
+// fire of EVERY weapon (see acquireProjectile).
 // Blob: continuous-flow cryo stream — short lifetime (mid-range) + steep gravity
 // (arcing drip) + rare trail drips so the droplet pool doesn't blow up when
 // ~16 blobs are in flight simultaneously.
 const PROJECTILE_TYPE_CONFIG = {
     plasma: { lifetime: 1.2,  gravity: 0,   trail: 'plasma',  trailInterval: 0.035 },
-    rocket: { lifetime: 30.0, gravity: 0,   trail: 'smoke',   trailInterval: 0.035 },
+    rocket: { lifetime: 6.0,  gravity: 0,   trail: 'smoke',   trailInterval: 0.035 },
     liquid: { lifetime: 0.8,  gravity: 4.0, trail: null,      trailInterval: 0.035 },
     blob:   { lifetime: 0.9,  gravity: 5.0, trail: 'droplet', trailInterval: 0.18  },
     default:{ lifetime: 3.0,  gravity: 0,   trail: null,      trailInterval: 0.035 },
 };
 
+// Claim a pool slot for a new bolt. Prefer a free slot; if the shared pool is
+// saturated, recycle the ACTIVE bolt with the least remaining lifetime (the one
+// closest to expiring anyway). This guarantees a shot is NEVER silently dropped:
+// by the time we get here fireWeapon has already played the muzzle flash, recoil
+// and SFX, so bailing on a full pool is exactly the "gun animates but nothing
+// comes out" bug. Recycling by least-remaining-lifetime evicts short-lived stream
+// bolts first and spares long-lived rockets whenever a stream bolt is available.
+function acquireProjectile() {
+    let oldest = null;
+    for (let i = 0; i < projectiles.length; i++) {
+        const p = projectiles[i];
+        if (!p.userData.active) return p;
+        if (!oldest || p.userData.lifetime < oldest.userData.lifetime) oldest = p;
+    }
+    if (oldest) deactivateProjectile(oldest);
+    return oldest;
+}
+
 function spawnProjectile(origin, dir, evolution, weapon) {
-    // Find inactive projectile from pool
-    const proj = projectiles.find(p => !p.userData.active);
+    const proj = acquireProjectile();
     if (!proj) return;
 
     const typeCfg = PROJECTILE_TYPE_CONFIG[weapon.projectileType] || PROJECTILE_TYPE_CONFIG.default;
@@ -877,16 +940,20 @@ function spawnProjectile(origin, dir, evolution, weapon) {
 }
 
 function setProjectileVisual(proj, weapon, baseScale, radius) {
-    const isFrankenBullet = weaponState.currentIndex === 0 && weapon.projectileType === 'plasma';
+    // Weapons flagged with a bulletStyle render the animated liquid sprite bullet
+    // ('green' = Franken, 'blue' = Soda Laser); others use the plain core+glow mesh.
+    const style = weapon.bulletStyle;
     const {
         coreMesh, glowMesh, frankenSprite, frankenGlow,
     } = proj.userData;
 
-    proj.userData.spriteBullet = isFrankenBullet;
+    proj.userData.spriteBullet = !!style;
 
-    if (isFrankenBullet) {
+    if (style) {
         coreMesh.visible = false;
         glowMesh.visible = false;
+        frankenSprite.material = style === 'blue' ? sodaBulletCoreMaterial : frankenBulletCoreMaterial;
+        frankenGlow.material = style === 'blue' ? sodaBulletGlowMaterial : frankenBulletGlowMaterial;
         frankenSprite.visible = true;
         frankenGlow.visible = true;
 
@@ -1079,8 +1146,9 @@ function updateProjectiles(dt, enemies, onHitCallback) {
 
         proj.userData.lifetime -= dt;
         if (proj.userData.lifetime <= 0) {
-            // Rockets detonate on timeout too — "infinite" in practice, but the safety
-            // lifetime prevents runaway projectiles from consuming pool slots forever.
+            // A rocket that never hit anything detonates on timeout instead of just
+            // vanishing. The timeout is deliberately short (see PROJECTILE_TYPE_CONFIG)
+            // so a stray rocket can't hoard a shared pool slot and starve other guns.
             if (proj.userData.projectileType === 'rocket') {
                 detonateProjectile(proj, enemies, onHitCallback);
             }
@@ -1144,7 +1212,7 @@ function updateProjectiles(dt, enemies, onHitCallback) {
         enemies.forEach(enemy => {
             if (!enemy.alive || !enemy.root.visible || enemy.animState === 'dying' || hit) return;
             const enemyCenter = enemy.root.position.clone();
-            enemyCenter.y = 1.0; // Body center height
+            enemyCenter.y = enemy.hitCenterY ?? 1.0; // scaled body centre (tall bosses)
             const dist = proj.position.distanceTo(enemyCenter);
             if (dist < enemy.hitRadius + projRadius + 0.5) {
                 onHitCallback(enemy, proj.position.clone(), proj.userData.damage, proj.userData.weaponIndex, {
@@ -1159,7 +1227,7 @@ function updateProjectiles(dt, enemies, onHitCallback) {
                     enemies.forEach(other => {
                         if (!other.alive || other === enemy) return;
                         const otherCenter = other.root.position.clone();
-                        otherCenter.y = 1.0;
+                        otherCenter.y = other.hitCenterY ?? 1.0;
                         const aoeDist = proj.position.distanceTo(otherCenter);
                         if (aoeDist < proj.userData.aoeRadius) {
                             const falloff = 1 - (aoeDist / proj.userData.aoeRadius);
@@ -1215,20 +1283,25 @@ function updateProjectiles(dt, enemies, onHitCallback) {
             }
         }
 
+        // Sprite-bullet weapons leave an environment splat, tinted to match the
+        // bolt ('green' = Franken, 'blue' = Soda Laser). Others leave none.
+        const impactStyle = WEAPON_DEFS[proj.userData.weaponIndex]?.bulletStyle;
+
         if (groundHit) {
             _groundImpactPoint.lerpVectors(_projectilePrevPosition, proj.position, bestT);
             _groundImpactPoint.y = groundY;
-            if (proj.userData.weaponIndex === 0) {
+            if (impactStyle) {
                 spawnFrankenImpactDecal(_groundImpactPoint, {
                     normal: _groundImpactNormal,
                     scale: 0.62,
+                    blue: impactStyle === 'blue',
                 });
             }
         }
 
         if (wallHit && hitWall) {
             _wallImpactHitPoint.lerpVectors(_projectilePrevPosition, proj.position, bestT);
-            if (proj.userData.weaponIndex === 0) {
+            if (impactStyle) {
                 // Prefer the true environment-mesh surface (accurate point + normal
                 // on slanted/round geometry); fall back to the collider face/side if
                 // the ray finds nothing solid.
@@ -1239,6 +1312,7 @@ function updateProjectiles(dt, enemies, onHitCallback) {
                 spawnFrankenImpactDecal(impact.point, {
                     normal: impact.normal,
                     scale: 0.58,
+                    blue: impactStyle === 'blue',
                 });
             }
             // Rockets detonate on wall impact (explosion + AoE).
@@ -1255,14 +1329,15 @@ function updateProjectiles(dt, enemies, onHitCallback) {
     updateBulletLights();
 }
 
-// Park the fixed bullet-light pool on the nearest in-flight Franken bolts (the
-// ones that read as lit); unused lights sit at intensity 0. Light COUNT never
-// changes, so no shader recompiles.
+// Park the fixed bullet-light pool on the nearest in-flight projectiles (from any
+// gun), tinting each light to its bolt's colour so the glow matches the shot;
+// unused lights sit at intensity 0. Light COUNT never changes, so no shader
+// recompiles.
 function updateBulletLights() {
     _bulletLightCandidates.length = 0;
     for (let i = 0; i < projectiles.length; i++) {
         const p = projectiles[i];
-        if (p.userData.active && p.userData.spriteBullet) _bulletLightCandidates.push(p);
+        if (p.userData.active) _bulletLightCandidates.push(p);
     }
     if (_bulletLightCandidates.length > MAX_BULLET_LIGHTS) {
         _bulletLightCandidates.sort((a, b) =>
@@ -1272,6 +1347,7 @@ function updateBulletLights() {
         const bullet = _bulletLightCandidates[i];
         if (bullet) {
             bulletLights[i].position.copy(bullet.position);
+            bulletLights[i].color.setHex(bullet.userData.color);
             bulletLights[i].intensity = BULLET_LIGHT_INTENSITY;
         } else {
             bulletLights[i].intensity = 0;
