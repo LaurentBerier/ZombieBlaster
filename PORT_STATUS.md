@@ -111,16 +111,32 @@ Verified headless (0 errors) across `poc_gamedir_probe` / `poc_hud_probe` / `poc
 - Ambient/attack zombie growls (call `AudioManager.Growl()` from `ZombieController`).
 - Damage-number / kill popups / death-splat VFX; combo-pulse HUD animation; boss/wave-boss announces.
 
-### Milestones after M3
-- **M4 — new enemies:** the template's beast (`CharacterController`) + UE soldier
+### ✅ Enemy roster (all zombie characters) — DONE
+Verified via `tools/poc_roster_probe.mjs` (0 errors; all 5 models skin + spawn + carry decal
+bones). All 5 zombie GLB sets (Zombie_1–5) load in entry.js as `zombieAssetsByType`; a new
+`js/entities/NPC/enemyTypes.js` defines 7 types → models + per-wave stats + the wave mix:
+- grunts **zombie / zombie_2 / zombie_3** (Zombie_1/2/3), **fast** (Zombie_1 @0.8), **tank**
+  (Zombie_2 @1.4), and the wave-bosses **zombie_5** (wave 1 debut) + **zombie_4** (waves 2+),
+  both @1.8. `ZombieController` gained per-type `bodyScale` (applied to bodyGroup, hit-flash
+  relative to it) + scaled `hitCenterY`. `ZombieSpawner.spawnType(type, stats)` maps type→GLB set;
+  `GameDirector` spawns the grunt horde (`pickRegularType`, tanks from w3 / fast from w2) then the
+  wave-boss. Score/scale/skin all verified per type.
+- Simplified vs original: the procedural 2.5× mega-BOSS (every 5th wave, no art) is skipped;
+  the Zombie_4/5 bosses use strong-but-survivable melee (dmg 40) instead of the telegraphed
+  9999 one-shot — porting the windup/dash-escape telegraph is a follow-up.
+
+### Milestones after the roster
+- **M4b — template enemies:** the template's beast (`CharacterController`) + UE soldier
   (`UeSoldierController`) as extra types. Needs an **arena navmesh** for the corridor
   (their AI is navmesh-driven) + factions + drop-weapon. Also give zombies an **Ammo hit
   capsule** (`CharacterFilter`, tagged `parentEntity`) so soldier hitscan can hit them
   (today only the projectile sphere-test finds zombies).
 - **M5 — polish & cut:** remove the old flat `js/` + `entry.reference.js` + `index.zombie.html`;
-  load the other 4 zombie types (Z3/Z4/Z5 + fast/tank variants); per-gun grip tuning for the
-  3 new guns (reuse the ` panel, paste into `weaponDefs.js`); explosion/acid-pool/liquid-splash
-  visual FX; ADS reconcile; tune lighting/feel.
+  per-gun grip tuning for the 3 new guns (reuse the ` panel, paste into `weaponDefs.js`);
+  explosion/acid-pool/liquid-splash visual FX; ADS reconcile; tune lighting/feel. (The other
+  zombie types are now loaded — see the roster section above.)
+- **M3 follow-ups:** pause + settings/audio-mixer overlay; zombie growls (`AudioManager.Growl()`
+  from `ZombieController`); damage-number / kill popups / death-splat VFX; boss-incoming announce.
 
 ## Known artifacts / gotchas
 - Headless ~4 FPS ⇒ slow settle; drive `stepSimulation` directly or wait longer in probes.

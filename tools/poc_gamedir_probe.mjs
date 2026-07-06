@@ -82,7 +82,7 @@ try {
   const pass = errors.length===0 && out.hasDir && out.spawnerWired && out.playerWired
     && multsOk && out.maxMult===8 && out.scoreAfter20>0
     && out.decayReset
-    && out.waveAfterDrive>=1 && out.toSpawnW1===8 && out.spawnedDuringWave1>0
+    && out.waveAfterDrive>=1 && out.toSpawnW1===9 && out.spawnedDuringWave1>0   // 8 grunts + 1 wave-boss
     && out.waveAfterClear===out.waveBefore+1
     && out.gameOver && out.savedHS===out.scoreForGO;
   log('multsOk='+multsOk, 'expMults='+JSON.stringify(expMults));

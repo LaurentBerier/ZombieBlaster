@@ -13,6 +13,7 @@
 
 import Component from '../../Component.js'
 import { activeZombies } from '../NPC/ZombieController.js'
+import { statsFor, pickRegularType, bossTypeForWave } from '../NPC/enemyTypes.js'
 
 const HIGH_SCORE_KEY = 'zombieBlasterHighScore'
 
@@ -32,20 +33,9 @@ const WAVE_DELAY = 3.0          // seconds between waves
 const FIRST_WAVE_DELAY = 2.0
 function regularToSpawn(wave) { return Math.min(5 + wave * 3, 40) }
 function spawnInterval(wave) { return Math.max(0.3, 1.5 - wave * 0.08) }
-
-// Per-wave Zombie_1 stats (mirrors enemies.js spawnEnemy scaling for the base zombie).
-function zombieStatsForWave(wave) {
-  return {
-    health: 30 + wave * 3,
-    speed: 2.4,
-    damage: 8 + wave,
-    hitRadius: 0.7,
-    scoreValue: 100,
-    walkAnimScale: 1.3,
-    attackRange: 1.8,
-    attackCooldown: 1.0,
-  }
-}
+// One wave-boss closes each wave (the original scaled to (wave-1) Zombie_4s — capped here so
+// high waves stay fair; tune later).
+const BOSSES_PER_WAVE = 1
 
 export default class GameDirector extends Component {
   constructor() {
@@ -69,6 +59,9 @@ export default class GameDirector extends Component {
       enemiesToSpawn: 0,
       enemiesSpawned: 0,
       enemiesRemaining: 0,
+      regularCount: 0,       // horde size (grunts/fast/tank); bosses spawn once these are out
+      bossCount: 0,
+      bossType: null,
       spawnTimer: 0,
       spawnIntervalCur: 1.5,
       // Flow
@@ -152,7 +145,10 @@ export default class GameDirector extends Component {
   startWave() {
     const s = this.state
     s.currentWave++
-    s.enemiesToSpawn = regularToSpawn(s.currentWave)
+    s.regularCount = regularToSpawn(s.currentWave)
+    s.bossCount = BOSSES_PER_WAVE
+    s.bossType = bossTypeForWave(s.currentWave)
+    s.enemiesToSpawn = s.regularCount + s.bossCount
     s.enemiesSpawned = 0
     s.enemiesRemaining = s.enemiesToSpawn
     s.spawnIntervalCur = spawnInterval(s.currentWave)
@@ -170,12 +166,16 @@ export default class GameDirector extends Component {
       return
     }
 
-    // Spawn the wave's horde on cadence (until all are out).
+    // Spawn the wave on cadence: the grunt/fast/tank horde first, then the wave-boss(es).
     if (s.enemiesSpawned < s.enemiesToSpawn) {
       s.spawnTimer -= dt
       if (s.spawnTimer <= 0) {
         s.spawnTimer = s.spawnIntervalCur
-        if (this.spawner) this.spawner.spawnOne(zombieStatsForWave(s.currentWave))
+        if (this.spawner) {
+          const isBoss = s.enemiesSpawned >= s.regularCount
+          const type = isBoss ? s.bossType : pickRegularType(s.currentWave)
+          this.spawner.spawnType(type, statsFor(type, s.currentWave))
+        }
         s.enemiesSpawned++
       }
     }
@@ -204,7 +204,8 @@ export default class GameDirector extends Component {
       score: 0, highScore, comboMultiplier: 1, maxComboMultiplier: 1, comboTimer: 0,
       killStreak: 0, maxKillStreak: 0, totalKills: 0,
       currentWave: 0, waveActive: false, waveDelayTimer: FIRST_WAVE_DELAY,
-      enemiesToSpawn: 0, enemiesSpawned: 0, enemiesRemaining: 0, spawnTimer: 0, spawnIntervalCur: 1.5,
+      enemiesToSpawn: 0, enemiesSpawned: 0, enemiesRemaining: 0,
+      regularCount: 0, bossCount: 0, bossType: null, spawnTimer: 0, spawnIntervalCur: 1.5,
       gameOver: false,
     })
   }

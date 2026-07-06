@@ -33,7 +33,7 @@ const _v = new THREE.Vector3()
 // Default stats (Zombie_1). The spawner can override per-type later.
 const DEFAULT_STATS = {
   health: 40, speed: 2.4, damage: 10, hitRadius: 0.7, scoreValue: 100,
-  walkAnimScale: 1.3, attackRange: 1.8, attackCooldown: 1.0,
+  walkAnimScale: 1.3, attackRange: 1.8, attackCooldown: 1.0, scale: 1.0,
 }
 
 export default class ZombieController extends Component {
@@ -62,7 +62,10 @@ export default class ZombieController extends Component {
     this.scoreValue = this.stats.scoreValue
     this.attackRange = this.stats.attackRange
     this.attackCooldown = this.stats.attackCooldown
-    this.hitCenterY = ZOMBIE_TARGET_HEIGHT / 2
+    // Per-type body scale (grunt 1.0, fast 0.8, tank 1.4, boss 1.8) applied to bodyGroup on
+    // top of the model auto-fit; the hit-sphere centre rides it so shots register up the body.
+    this.bodyScale = this.stats.scale ?? 1.0
+    this.hitCenterY = ZOMBIE_TARGET_HEIGHT * this.bodyScale / 2
 
     this.root = new THREE.Group()
     this.bodyGroup = new THREE.Group()
@@ -128,6 +131,9 @@ export default class ZombieController extends Component {
     })
     this.headBone = model.getObjectByName('Head') || null
     this.bodyGroup.add(model)
+    // Type scale sits on bodyGroup (the squash/stretch layer); the model is already auto-fit
+    // to target height, so this makes fast zombies small and bosses large.
+    this.bodyGroup.scale.setScalar(this.bodyScale)
     this.model = model
 
     // Per-instance mixer bound to the cloned skeleton; clips bind by bone name.
@@ -233,13 +239,14 @@ export default class ZombieController extends Component {
 
     if (this.mixer) this.mixer.update(dt * speedMult)
 
-    // Hit-flash squash (from a stable base so repeated hits don't drift).
+    // Hit-flash squash (relative to the type's base scale so bosses/fast stay their size).
+    const bs = this.bodyScale
     if (this.hitFlashTimer > 0) {
       this.hitFlashTimer -= dt
       const r = Math.max(0, this.hitFlashTimer / 0.15)
-      this.bodyGroup.scale.set(1 + r * 0.15, 1 - r * 0.1, 1 + r * 0.15)
+      this.bodyGroup.scale.set(bs * (1 + r * 0.15), bs * (1 - r * 0.1), bs * (1 + r * 0.15))
     } else {
-      this.bodyGroup.scale.lerp(_v.set(1, 1, 1), dt * 8)
+      this.bodyGroup.scale.lerp(_v.set(bs, bs, bs), dt * 8)
     }
 
     // Knockback impulse decays exponentially.

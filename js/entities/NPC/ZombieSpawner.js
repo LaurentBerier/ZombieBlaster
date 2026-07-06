@@ -11,13 +11,15 @@ import Component from '../../Component.js'
 import Entity from '../../Entity.js'
 import ZombieController, { activeZombies } from './ZombieController.js'
 import { ARENA } from '../Level/ArenaSetup.js'
+import { ENEMY_TYPES, TYPE_MODEL, statsFor } from './enemyTypes.js'
 
 export default class ZombieSpawner extends Component {
-  // assets = { scene, walk, attack, death } shared across all zombies.
-  constructor(assets, scene, physicsWorld, opts = {}) {
+  // assetsByType = { Zombie_1: {scene,walk,attack,death}, Zombie_2: {...}, ... } — one GLB set
+  // per character model; the enemy TYPE picks which via TYPE_MODEL.
+  constructor(assetsByType, scene, physicsWorld, opts = {}) {
     super()
     this.name = 'ZombieSpawner'
-    this.assets = assets
+    this.assetsByType = assetsByType
     this.scene = scene
     this.world = physicsWorld
     this.maxAlive = opts.maxAlive ?? 8
@@ -40,12 +42,16 @@ export default class ZombieSpawner extends Component {
     if (this.timer > 0) return
     if (activeZombies.length >= this.maxAlive) { this.timer = 0.5; return }
     this.timer = this.interval
-    this.spawnOne()
+    this.spawnType(ENEMY_TYPES.ZOMBIE, statsFor(ENEMY_TYPES.ZOMBIE, 1))
   }
 
-  // Spawn one zombie at a random arena spawn point. `stats` (optional) overrides the per-wave
-  // health/speed/damage/scoreValue. Returns the new ZombieController.
-  spawnOne(stats = {}) {
+  // Spawn a specific enemy TYPE (its GLB set via TYPE_MODEL) with the given per-wave stats.
+  // Returns the new ZombieController.
+  spawnType(type, stats = {}) {
+    const model = TYPE_MODEL[type] || 'Zombie_1'
+    const assets = this.assetsByType[model] || this.assetsByType.Zombie_1
+    if (!assets) return null
+
     const points = ARENA.spawnPoints
     let x = (Math.random() - 0.5) * 30, z = (Math.random() - 0.5) * 30
     if (points && points.length) {
@@ -57,11 +63,16 @@ export default class ZombieSpawner extends Component {
     const entity = new Entity()
     entity.SetName(`Zombie${this._id++}`)
     entity.SetPosition(new THREE.Vector3(x, ARENA.floorY, z))
-    const controller = new ZombieController(this.assets, this.scene, this.world, stats)
+    const controller = new ZombieController(assets, this.scene, this.world, stats)
     entity.AddComponent(controller)
     this.manager.Add(entity)
     // EndSetup already ran — initialize this runtime entity's components now.
     for (const k in entity.components) entity.components[k].Initialize()
     return controller
+  }
+
+  // Back-compat: spawn a base grunt (used by the director-less fallback + the test probes).
+  spawnOne(stats) {
+    return this.spawnType(ENEMY_TYPES.ZOMBIE, stats || statsFor(ENEMY_TYPES.ZOMBIE, 1))
   }
 }

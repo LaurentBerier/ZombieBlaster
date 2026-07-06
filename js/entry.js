@@ -50,12 +50,17 @@ const ueRollSrc = 'assets/Characters/ue/RollForward.glb'
 const ueSlideSrc = 'assets/Characters/ue/Slide.glb'
 const ueCrouchIdleSrc = 'assets/Characters/ue/CrouchIdle.glb'
 
-// Zombie enemy (Zombie_1): Draco-compressed GLBs — walk-with-skin doubles as the mesh
-// source; the Charged/Dead GLBs contribute only their attack/death clips (bound by bone
-// name to the walk skeleton). More zombie types are a fast-follow (just more loads).
-const zombieWalk = 'assets/Characters/Zombie_1/Zombie_1_Unsteady_Walk_withSkin.glb'
-const zombieAttack = 'assets/Characters/Zombie_1/Zombie_1__Charged_1.glb'
-const zombieDeath = 'assets/Characters/Zombie_1/Zombie_1__Dead.glb'
+// Zombie enemies — the full cast (Draco-compressed GLBs). Per model: a walk-with-skin GLB
+// (mesh source + walk clip) plus Charged/Dead GLBs that contribute only their attack/death
+// clips (bound by bone name to the walk skeleton). All 5 models are loaded so the wave
+// director can field grunts (Zombie_1/2/3), fast/tank variants, and the Zombie_4/5 bosses.
+const ZOMBIE_MODELS = {
+  Zombie_1: { walk: 'Zombie_1_Unsteady_Walk_withSkin.glb', attack: 'Zombie_1__Charged_1.glb', death: 'Zombie_1__Dead.glb' },
+  Zombie_2: { walk: 'Zombie_2_Unsteady_Walk_withSkin.glb', attack: 'Zombie_2__Charged_1.glb', death: 'Zombie_2__Dead.glb' },
+  Zombie_3: { walk: 'Zombie_3_Unsteady_Walk_withSkin.glb', attack: 'Zombie_3_Charged_1.glb', death: 'Zombie_3_Dead.glb' },
+  Zombie_4: { walk: 'Zombie_4_Unsteady_Walk_withSkin.glb', attack: 'Zombie_4__Charged_1.glb', death: 'Zombie_4__Dead.glb' },
+  Zombie_5: { walk: 'Zombie_5__Walking_1.glb', attack: 'Zombie_5__Charged_1.glb', death: 'Zombie_5__Dead.glb' },
+}
 
 // Funky weapon: the Franken-Gun (Neon Biohazard Blaster) GLB — the VISIBLE gun
 // socketed to the hand (aim-IK'd like the rifle) — plus the animated liquid sprite
@@ -254,10 +259,12 @@ class FPSGameApp {
     promises.push(this.AddAsset(ak47, gltfLoader, 'ak47'))
     promises.push(this.AddAsset(muzzleFlash, gltfLoader, 'muzzleFlash'))
     promises.push(this.AddAsset(ak47Shot, audioLoader, 'ak47Shot'))
-    // Zombie enemy (Zombie_1) — Draco GLBs.
-    promises.push(this.AddAsset(zombieWalk, gltfLoader, 'zombieWalk'))
-    promises.push(this.AddAsset(zombieAttack, gltfLoader, 'zombieAttack'))
-    promises.push(this.AddAsset(zombieDeath, gltfLoader, 'zombieDeath'))
+    // Zombie enemies — all 5 models' walk/attack/death GLBs (Draco).
+    for (const [model, files] of Object.entries(ZOMBIE_MODELS)) {
+      promises.push(this.AddAsset(`assets/Characters/${model}/${files.walk}`, gltfLoader, `${model}_walk`))
+      promises.push(this.AddAsset(`assets/Characters/${model}/${files.attack}`, gltfLoader, `${model}_attack`))
+      promises.push(this.AddAsset(`assets/Characters/${model}/${files.death}`, gltfLoader, `${model}_death`))
+    }
     // Funky weapon + its sprite-bullet sheet.
     // The full funky arsenal (Franken / Bowling / Soda / Cryo GLBs), keyed by registry glbKey.
     for (const [key, url] of Object.entries(WEAPON_GLBS)) {
@@ -270,13 +277,17 @@ class FPSGameApp {
 
     await this.PromiseProgress(promises, this.OnProgress)
 
-    // Shared zombie assets: the walk GLB is the mesh source; the Charged/Dead GLBs
+    // Per-model zombie asset sets: the walk GLB is the mesh source; the Charged/Dead GLBs
     // contribute only their first clip (attack/death), bound by bone name at play time.
-    this.zombieAssets = {
-      scene: this.assets['zombieWalk'].scene,
-      walk: this.assets['zombieWalk'].animations[0],
-      attack: this.assets['zombieAttack'].animations[0],
-      death: this.assets['zombieDeath'].animations[0],
+    this.zombieAssetsByType = {}
+    for (const model of Object.keys(ZOMBIE_MODELS)) {
+      const walk = this.assets[`${model}_walk`], attack = this.assets[`${model}_attack`], death = this.assets[`${model}_death`]
+      this.zombieAssetsByType[model] = {
+        scene: walk.scene,
+        walk: walk.animations[0],
+        attack: attack && attack.animations[0],
+        death: death && death.animations[0],
+      }
     }
 
     // The funky arsenal: one runtime per registry entry, each with its own cloned visible GLB
@@ -410,7 +421,7 @@ class FPSGameApp {
     // apply to the director-less POC fallback).
     const spawnerEntity = new Entity()
     spawnerEntity.SetName('ZombieSpawner')
-    spawnerEntity.AddComponent(new ZombieSpawner(this.zombieAssets, this.scene, this.physicsWorld, { maxAlive: 8, interval: 1.6 }))
+    spawnerEntity.AddComponent(new ZombieSpawner(this.zombieAssetsByType, this.scene, this.physicsWorld, { maxAlive: 8, interval: 1.6 }))
     this.entityManager.Add(spawnerEntity)
 
     this.entityManager.EndSetup()
