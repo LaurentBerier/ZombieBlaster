@@ -19,6 +19,7 @@ import Entity from './Entity.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js'
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
+import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
 import { SkeletonUtils } from 'three/examples/jsm/utils/SkeletonUtils.js'
 
 import Input from './Input.js'
@@ -32,6 +33,7 @@ import WeaponPlacementDebug from './entities/Player/WeaponPlacementDebug.js'
 import WeaponAimDebug from './entities/Player/WeaponAimDebug.js'
 import UIManager from './entities/UI/UIManager.js'
 import ArenaSetup from './entities/Level/ArenaSetup.js'
+import ZombieSpawner from './entities/NPC/ZombieSpawner.js'
 import { adaptClipToPreOriented } from './entities/Common/UeMannequin.js'
 
 // --- Buildless asset URLs (relative to index.html). ---
@@ -41,6 +43,13 @@ const ueClipsSrc = 'assets/Characters/ue/SK_Mannequin.glb'
 const ueRollSrc = 'assets/Characters/ue/RollForward.glb'
 const ueSlideSrc = 'assets/Characters/ue/Slide.glb'
 const ueCrouchIdleSrc = 'assets/Characters/ue/CrouchIdle.glb'
+
+// Zombie enemy (Zombie_1): Draco-compressed GLBs — walk-with-skin doubles as the mesh
+// source; the Charged/Dead GLBs contribute only their attack/death clips (bound by bone
+// name to the walk skeleton). More zombie types are a fast-follow (just more loads).
+const zombieWalk = 'assets/Characters/Zombie_1/Zombie_1_Unsteady_Walk_withSkin.glb'
+const zombieAttack = 'assets/Characters/Zombie_1/Zombie_1__Charged_1.glb'
+const zombieDeath = 'assets/Characters/Zombie_1/Zombie_1__Dead.glb'
 
 // Third-person weapon (socketed to the hand) + its magazine-reload clip.
 const ak47Tps = 'assets/guns/New/SK_AK47.FBX'
@@ -148,6 +157,14 @@ class FPSGameApp {
 
   async LoadAssets() {
     const gltfLoader = new GLTFLoader()
+    // The zombie GLBs are Draco-compressed (KHR_draco_mesh_compression). Reuse the
+    // JS decoder already vendored in the repo (js/lib/draco/gltf/). Harmless for the
+    // non-Draco GLBs — the extension is only invoked when present.
+    const dracoLoader = new DRACOLoader()
+    dracoLoader.setDecoderPath('js/lib/draco/gltf/')
+    dracoLoader.setDecoderConfig({ type: 'js' })
+    dracoLoader.preload()
+    gltfLoader.setDRACOLoader(dracoLoader)
     // SK_AK47.FBX references a weapon-tint texture we don't ship; resolve it to a 1x1 px.
     const akManager = new THREE.LoadingManager()
     akManager.setURLModifier(url =>
@@ -168,8 +185,21 @@ class FPSGameApp {
     promises.push(this.AddAsset(ak47, gltfLoader, 'ak47'))
     promises.push(this.AddAsset(muzzleFlash, gltfLoader, 'muzzleFlash'))
     promises.push(this.AddAsset(ak47Shot, audioLoader, 'ak47Shot'))
+    // Zombie enemy (Zombie_1) — Draco GLBs.
+    promises.push(this.AddAsset(zombieWalk, gltfLoader, 'zombieWalk'))
+    promises.push(this.AddAsset(zombieAttack, gltfLoader, 'zombieAttack'))
+    promises.push(this.AddAsset(zombieDeath, gltfLoader, 'zombieDeath'))
 
     await this.PromiseProgress(promises, this.OnProgress)
+
+    // Shared zombie assets: the walk GLB is the mesh source; the Charged/Dead GLBs
+    // contribute only their first clip (attack/death), bound by bone name at play time.
+    this.zombieAssets = {
+      scene: this.assets['zombieWalk'].scene,
+      walk: this.assets['zombieWalk'].animations[0],
+      attack: this.assets['zombieAttack'].animations[0],
+      death: this.assets['zombieDeath'].animations[0],
+    }
 
     this.assets['muzzleFlash'] = this.assets['muzzleFlash'].scene
     // The FP arms viewmodel (Hands) reads its idle/shoot/reload clips off the scene's
@@ -267,6 +297,12 @@ class FPSGameApp {
     uimanagerEntity.SetName('UIManager')
     uimanagerEntity.AddComponent(new UIManager())
     this.entityManager.Add(uimanagerEntity)
+
+    // Zombie population (spawns at runtime from the arena spawn points, up to a cap).
+    const spawnerEntity = new Entity()
+    spawnerEntity.SetName('ZombieSpawner')
+    spawnerEntity.AddComponent(new ZombieSpawner(this.zombieAssets, this.scene, this.physicsWorld, { maxAlive: 8, interval: 1.6 }))
+    this.entityManager.Add(spawnerEntity)
 
     this.entityManager.EndSetup()
     this.scene.add(this.camera)
