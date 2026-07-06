@@ -47,13 +47,15 @@ export const UE_BODY_LAYER = 1;
 const WEAPON_LENGTH_CM = 72;
 const WEAPON_GRIP = {
     // Hand-tuned in TPS with the in-game placement tool (WeaponPlacementDebug, the `
-    // panel). Position is hand-local centimetres; rotation seats the AK upright in the
-    // palm with the barrel running forward. Re-tune with the panel and paste here.
-    position: new THREE.Vector3(-21.2, -4.4, 0.7),
+    // panel). Position is hand-local centimetres; rotation seats the gun in the palm with
+    // the barrel running forward. Tuned for the Franken-Gun (Neon Biohazard Blaster) GLB —
+    // the current in-hand weapon. Re-tune with the panel and paste here. (M2 moves per-weapon
+    // grips into the weapon registry so each gun seats correctly on swap.)
+    position: new THREE.Vector3(-22.2, -4.4, 0.7),
     rotationEuler: new THREE.Euler(
-        THREE.MathUtils.degToRad(0),
-        THREE.MathUtils.degToRad(-5),
-        THREE.MathUtils.degToRad(272),
+        THREE.MathUtils.degToRad(90),
+        THREE.MathUtils.degToRad(-20),
+        THREE.MathUtils.degToRad(362),
     ),
 };
 
