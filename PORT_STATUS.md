@@ -47,6 +47,12 @@ New/ported code (all under `js/entities/`):
 - **Decal system** — DONE (both parts; see below). Verify with `tools/poc_decals_probe.mjs`.
 - **M3 gameplay + identity** — DONE (see below). Verify with `tools/poc_gamedir_probe.mjs`,
   `poc_hud_probe.mjs`, `poc_evolution_probe.mjs`.
+- **Enemy roster** (all 5 zombie characters) + **pause menu** + **cursor/floor/click fixes** — DONE.
+- **Player = the Frog** — the Tripo "Frog" (`assets/Characters/Sandscape_Frog_2_optimized.glb`,
+  copied from the ThreeJS_UE_TPS_FPS template) replaces the mannequin as the player body. Same UE
+  skeleton, so `ueAnims` + aim-IK bind by bone name unchanged; entry.js clones `frogModel` instead
+  of `ueModel` (mannequin kept loaded as the one-line fallback). ~377k tris (heavier than the
+  mannequin — watch framerate on low-end).
 
 ## WHAT'S LEFT
 

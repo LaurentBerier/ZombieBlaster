@@ -45,6 +45,11 @@ import { adaptClipToPreOriented } from './entities/Common/UeMannequin.js'
 // --- Buildless asset URLs (relative to index.html). ---
 // UE Mannequin player body MESH (Y-up, metre-scaled, baked PBR) + its clip source.
 const ueChar = 'assets/Characters/ue/SK_Mannequin_new.glb'
+// Player body MESH: the Tripo "Frog" (from the ThreeJS_UE_TPS_FPS template) — rigged to the
+// SAME UE Mannequin skeleton, so the shared ueAnims drive it by bone name with no re-bake and
+// the aim-IK resolves its sockets exactly like the mannequin. The mannequin (ueChar) stays
+// loaded as the canonical reference rig / one-line fallback (swap frogModel -> ueModel).
+const frogChar = 'assets/Characters/Sandscape_Frog_2_optimized.glb'
 const ueClipsSrc = 'assets/Characters/ue/SK_Mannequin.glb'
 const ueRollSrc = 'assets/Characters/ue/RollForward.glb'
 const ueSlideSrc = 'assets/Characters/ue/Slide.glb'
@@ -285,6 +290,7 @@ class FPSGameApp {
     }
 
     promises.push(this.AddAsset(ueChar, gltfLoader, 'ueChar'))
+    promises.push(this.AddAsset(frogChar, gltfLoader, 'frogChar'))
     promises.push(this.AddAsset(ueClipsSrc, gltfLoader, 'ueClips'))
     promises.push(this.AddAsset(ueRollSrc, gltfLoader, 'ueRoll'))
     promises.push(this.AddAsset(ueSlideSrc, gltfLoader, 'ueSlide'))
@@ -334,8 +340,10 @@ class FPSGameApp {
     // .animations; the GLTFLoader puts them on the gltf, not the scene — copy them over.
     this.assets['ak47'].scene.animations = this.assets['ak47'].animations
 
-    // Player body mesh + shared UE rifle clips, adapted onto the pre-oriented rig.
+    // Player body mesh + shared UE rifle clips, adapted onto the pre-oriented rig. The Frog is
+    // the player body (same UE skeleton); the mannequin stays as the fallback reference rig.
     this.ueModel = this.assets['ueChar'].scene
+    this.frogModel = this.assets['frogChar'].scene
     const ueClips = this.assets['ueClips'].animations
     const byName = (n) => { const c = ueClips.find(c => c.name === n); return c ? adaptClipToPreOriented(c) : undefined }
     const rollSrc = this.assets['ueRoll'] ? this.assets['ueRoll'].animations : []
@@ -419,7 +427,7 @@ class FPSGameApp {
     // aims at the crosshair with no per-weapon ikConfig (tunable later with the ` panel).
     // magReload clip is null — the Franken-Gun has no 'Magazine' bone to animate.
     playerEntity.AddComponent(new PlayerBody(
-      SkeletonUtils.clone(this.ueModel), this.ueAnims, this.scene, this.camera,
+      SkeletonUtils.clone(this.frogModel), this.ueAnims, this.scene, this.camera,
       this.ueTextures, this.weaponRuntimes[0].mesh, true, null
     ))
     playerEntity.AddComponent(new Hands(this.camera, this.assets['ak47'].scene))
