@@ -1,0 +1,264 @@
+/* Ported from the reference three-fps inline <style>, plus TPS/FPS additions. */
+body {
+  margin: 0;
+  overflow: hidden;
+  font-family: 'Roboto', sans-serif;
+  color: white;
+  background: #000;
+}
+
+canvas {
+  display: block;
+}
+
+/* Vector reticle: a zero-size point at screen centre with four ticks placed around it. The GAP from
+   centre to each tick is driven by WeaponManager via --reticle-gap (wider hipfire = less precision,
+   tighter ADS, a small fire bloom); the tick thickness/length are FIXED, so the outline weight is the
+   same whatever the spread — a bigger reticle never means thicker lines. */
+#crosshair {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  --reticle-gap: 1vw;            /* centre -> inner end of each tick (set per-frame by WeaponManager) */
+  --reticle-thickness: 2px;     /* CONSTANT outline weight — identical hipfire & ADS */
+  --reticle-length: 7px;        /* CONSTANT tick length */
+  --reticle-color: rgba(255, 255, 255, 0.9);
+}
+
+.ch-tick {
+  position: absolute;
+  background: var(--reticle-color);
+  /* Thin dark halo so the white ticks read on bright backgrounds, like the old sprite did. */
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+  /* Ease the gap open/closed so swapping hipfire<->ADS (and the fire bloom) blooms rather than snaps.
+     The gap feeds top/bottom/left/right below, so transitioning those animates the spread. */
+  transition: top 0.1s ease-out, bottom 0.1s ease-out, left 0.1s ease-out, right 0.1s ease-out;
+}
+
+/* Vertical ticks (above/below centre): narrow = thickness, tall = length, centred on X. */
+.ch-top, .ch-bottom {
+  width: var(--reticle-thickness);
+  height: var(--reticle-length);
+  left: calc(var(--reticle-thickness) / -2);
+}
+.ch-top    { bottom: var(--reticle-gap); }
+.ch-bottom { top: var(--reticle-gap); }
+
+/* Horizontal ticks (left/right of centre): wide = length, short = thickness, centred on Y. */
+.ch-left, .ch-right {
+  height: var(--reticle-thickness);
+  width: var(--reticle-length);
+  top: calc(var(--reticle-thickness) / -2);
+}
+.ch-left  { right: var(--reticle-gap); }
+.ch-right { left: var(--reticle-gap); }
+
+/* Damage vignette: a red glow that pools at the screen edges. Flashed (opacity 0 -> ~0.8 -> 0)
+   by UIManager.FlashDamage on a hit. Above the world, below the HUD readouts; never eats input. */
+#blood_overlay {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  z-index: 30;
+  background: radial-gradient(ellipse at center,
+    rgba(120, 0, 0, 0) 45%,
+    rgba(120, 0, 0, 0.25) 75%,
+    rgba(110, 0, 0, 0.7) 100%);
+}
+
+#ammo_container {
+  position: absolute;
+  right: 5%;
+  bottom: 5%;
+  font-size: 3em;
+}
+
+#weapon_name {
+  position: absolute;
+  right: 5%;
+  bottom: 13%;
+  font-size: 1.4em;
+  opacity: 0.85;
+  letter-spacing: 1px;
+}
+
+#camera_mode {
+  position: absolute;
+  left: 5%;
+  top: 5%;
+  font-size: 1.2em;
+  font-weight: 700;
+  letter-spacing: 2px;
+  opacity: 0.8;
+}
+
+#progress {
+  position: absolute;
+  bottom: 9%;
+  left: 0;
+  width: 0;
+  height: 2%;
+  background-color: white;
+  /* Above the black curtain so the boot loading bar stays visible on it. */
+  z-index: 60;
+}
+
+/* Full-screen black curtain that cross-fades the onboarding states. Sits above the
+   menu/loading/game but below the boot progress bar; starts opaque (page fades in).
+   Driven from entry.js by toggling opacity between 1 (black) and 0 (clear). */
+#fade {
+  position: fixed;
+  inset: 0;
+  background-color: #000;
+  opacity: 1;
+  z-index: 50;
+  pointer-events: none;
+  transition: opacity 0.6s ease;
+}
+
+/* Loading screen revealed (curtain clear) while the game is built. Below the
+   curtain so a fade-to-black covers it. Its own black bg hides the live render
+   that starts behind it. */
+#loading {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background-color: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 22px;
+  visibility: hidden;
+}
+
+#loading p {
+  margin: 0;
+  letter-spacing: 6px;
+  font-size: 1.1em;
+  opacity: 0.75;
+}
+
+#loading .spinner {
+  width: 46px;
+  height: 46px;
+  border: 3px solid rgba(255, 255, 255, 0.2);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+#health_container {
+  position: absolute;
+  bottom: 8%;
+  left: 5%;
+  width: 18%;
+  height: 2%;
+  border: 1px solid #ffffff;
+}
+
+#health_progress {
+  position: absolute;
+  background-color: #ffffff;
+  width: 100%;
+  height: 100%;
+}
+
+#game_hud {
+  visibility: hidden;
+}
+
+#menu {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  background-color: black;
+  /* Splashscreen art shown in full (contain) and scaled down to fit, so the
+     whole 3:2 image stays visible whatever the window aspect — the title reads
+     horizontally centered and the Unreal Engine logo at the bottom is never
+     cropped; black fills the side bars. No overlay, so it renders fully bright.
+     Path is relative to this stylesheet. */
+  background-image: url('../Menu.png');
+  background-size: contain;
+  /* The Unreal Engine logo is baked into the art (centered in the PNG), so it can
+     only move by moving the art. Shift the art 30px right so the logo lands 30px
+     right of centre; the NEW GAME button and keyboard hint below are shifted the
+     same 30px so all three stay aligned on one vertical axis. */
+  background-position: calc(50% + 30px) center;
+  background-repeat: no-repeat;
+  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  visibility: hidden;
+}
+
+#menu .hint {
+  position: absolute;
+  bottom: 2%;
+  /* Full-width centered text, then nudged right. */
+  left: 0;
+  right: 0;
+  margin: 0 auto;
+  text-align: center;
+  transform: translateX(110px);
+  opacity: 0.55;
+  font-size: 0.95em;
+}
+
+h1 {
+  font-family: 'Libre Barcode 39 Text', cursive;
+  font-size: 4em;
+}
+
+button {
+  background-color: rgba(0, 0, 0, 0);
+  color: rgb(221, 221, 221);
+  font-size: 1.5em;
+  border: none;
+  cursor: pointer;
+  margin-top: 4%;
+  font-weight: 700;
+}
+
+button:hover {
+  color: #fff;
+}
+
+/* NEW GAME: nudged right (matches the keyboard hint's offset) and down ~20px, with
+   a boxed outline + hover effect so it reads clearly as a clickable button. */
+#start_game {
+  position: relative;
+  left: 110px;
+  top: 20px;
+  padding: 12px 34px;
+  border: 2px solid rgba(255, 255, 255, 0.55);
+  border-radius: 3px;
+  letter-spacing: 2px;
+  background-color: rgba(0, 0, 0, 0.25);
+  transition: background-color 0.18s ease, border-color 0.18s ease,
+              color 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+#start_game:hover {
+  color: #fff;
+  border-color: #fff;
+  background-color: rgba(255, 255, 255, 0.18);
+  transform: scale(1.06);
+  box-shadow: 0 0 14px rgba(255, 255, 255, 0.35);
+}
+
+#debug {
+  position: absolute;
+  right: 5%;
+  top: 5%;
+}
