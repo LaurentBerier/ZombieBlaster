@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import Component from '../../Component.js'
-import { buildUeMannequin, UE_BODY_LAYER, collectUpperBoneNames, splitClipByBones, WEAPON_GRIP_DEFAULT, WEAPON_GRIP_FPS_DEFAULT, WEAPON_GRIP_FPS_AIM_DEFAULT } from '../Common/UeMannequin.js'
+import { buildUeMannequin, seatWeaponMesh, UE_BODY_LAYER, collectUpperBoneNames, splitClipByBones, WEAPON_GRIP_DEFAULT, WEAPON_GRIP_FPS_DEFAULT, WEAPON_GRIP_FPS_AIM_DEFAULT } from '../Common/UeMannequin.js'
 import WeaponAimIK from './WeaponAimIK.js'
 import FootIK from './FootIK.js'
 import HurtFlinch from '../Common/HurtFlinch.js'
@@ -1290,6 +1290,21 @@ export default class PlayerBody extends Component{
         // Apply immediately if it's the seat currently shown (TPS / FPS hip / FPS ADS), so a nudge in
         // the placement tool reads live — including the FPS_AIM grip while holding right click in FPS.
         if(mode === this.ActiveGripMode()){ this.ApplyWeaponGrip(mode); }
+    }
+
+    // Swap the VISIBLE in-hand gun (weapon switch). Reseat the new mesh in the same hand
+    // pivot (recenter + auto-scale via the shared helper), update the TPS grip seat to this
+    // weapon's grip so the per-frame grip easing lands on it, and re-resolve the aim-IK
+    // muzzle/grip sockets for the new gun's shape. FPS seats stay the shared defaults.
+    SetVisibleWeapon(mesh, grip){
+        if(!this.weaponPivot || !mesh){ return; }
+        seatWeaponMesh(this.weaponPivot, mesh, grip || WEAPON_GRIP_DEFAULT, null);
+        if(grip && this.weaponGrips){
+            this.weaponGrips.TPS.position.copy(grip.position);
+            this.weaponGrips.TPS.quaternion.setFromEuler(grip.rotationEuler);
+            if(this.ActiveGripMode && this.ApplyWeaponGrip && this.ActiveGripMode() === 'TPS'){ this.ApplyWeaponGrip('TPS'); }
+        }
+        if(this.weaponAimIK && this.weaponAimIK.OnWeaponChanged){ this.weaponAimIK.OnWeaponChanged(); }
     }
 
     // First-person eye anchor: the head bone's current world position. Returns false

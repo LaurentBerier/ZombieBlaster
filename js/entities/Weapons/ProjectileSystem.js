@@ -1,10 +1,11 @@
 // ProjectileSystem — the funky projectile weapons on the new engine. Ported from the
-// original weapons.js: a pooled bolt with the animated liquid SPRITE bullet (the
-// Franken-Gun/Soda-Laser signature look), a colored bullet-light, per-type flight,
-// and a sphere hit-test against the live zombies. Instead of the template's hitscan,
-// the weapon fires one of these from the real muzzle toward the crosshair target, and
-// on contact it broadcasts the decoupled 'hit' event to the zombie entity (which runs
-// its damage + ragdoll). Keeps the projectile funk while adopting the rifle rig.
+// original weapons.js: a pooled bolt with either the animated liquid SPRITE bullet
+// (Franken-Gun green / Soda-Laser blue — the signature look) or a colored emissive MESH
+// bolt (Bowling rocket / Cryo blob), a colored bullet-light, per-type flight (gravity),
+// spread, and a sphere hit-test against the live zombies. The weapon fires one from the
+// real muzzle toward the crosshair target; on contact it broadcasts the decoupled 'hit'
+// (amount + knockback + status) to the zombie entity, which runs its damage + ragdoll,
+// and spawns a green-blood impact burst.
 
 import * as THREE from 'three'
 import Component from '../../Component.js'
@@ -18,6 +19,7 @@ const SODA_GLOW = 0x3a86ff
 
 const TYPE_CFG = {
   plasma: { lifetime: 1.2, gravity: 0 },
+  rocket: { lifetime: 4.0, gravity: 0 },
   liquid: { lifetime: 0.9, gravity: 4.0 },
   blob: { lifetime: 0.9, gravity: 5.0 },
   default: { lifetime: 1.4, gravity: 0 },
@@ -64,7 +66,6 @@ export default class ProjectileSystem extends Component {
     })
     this.greenCore = mat(tex, 0xffffff, 1.0)
     this.greenGlow = mat(tex, COLORS.lime, 0.45)
-    // Blue (Soda Laser) variant — RGB-rotated sheet, animated in lockstep with green.
     this.blueTex = makeChannelRotatedTexture(tex)
     this.blueCore = mat(this.blueTex, 0xffffff, 1.0)
     this.blueGlow = mat(this.blueTex, SODA_GLOW, 0.45)
@@ -75,22 +76,31 @@ export default class ProjectileSystem extends Component {
     const w = frame % SHEET.frames
     const col = w % SHEET.columns
     const row = Math.floor(w / SHEET.columns)
-    const ox = col / SHEET.columns
-    const oy = 1 - ((row + 1) / SHEET.rows)
-    this.greenTex.offset.set(ox, oy)
-    if (this.blueTex) this.blueTex.offset.set(ox, oy)
+    this.greenTex.offset.set(col / SHEET.columns, 1 - ((row + 1) / SHEET.rows))
+    if (this.blueTex) this.blueTex.offset.copy(this.greenTex.offset)
     this._frame = w
   }
 
   buildPool() {
+    const coreGeo = new THREE.SphereGeometry(0.13, 8, 8)
+    const glowGeo = new THREE.SphereGeometry(0.24, 6, 6)
     for (let i = 0; i < MAX_PROJECTILES; i++) {
       const g = new THREE.Group()
       const core = new THREE.Sprite(this.greenCore)
       const glow = new THREE.Sprite(this.greenGlow)
       core.renderOrder = 8; glow.renderOrder = 7
       g.add(glow); g.add(core)
+      // Mesh bolt (rocket/blob) — colored per shot; sprite + mesh never shown together.
+      const meshCore = new THREE.Mesh(coreGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false }))
+      const meshGlow = new THREE.Mesh(glowGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.35, depthWrite: false, toneMapped: false }))
+      meshCore.visible = false; meshGlow.visible = false
+      g.add(meshGlow); g.add(meshCore)
       g.visible = false
-      g.userData = { active: false, velocity: new THREE.Vector3(), damage: 0, lifetime: 0, gravity: 0, color: COLORS.lime, knockback: 0, core, glow, coreScale: 1, glowScale: 1 }
+      g.userData = {
+        active: false, velocity: new THREE.Vector3(), damage: 0, lifetime: 0, gravity: 0,
+        color: COLORS.lime, knockback: 0, status: null, sprite: true, radius: 0.18,
+        core, glow, meshCore, meshGlow, coreScale: 1, glowScale: 1,
+      }
       this.scene.add(g)
       this.projectiles.push(g)
     }
@@ -116,7 +126,6 @@ export default class ProjectileSystem extends Component {
 
   // Called by WeaponManager when a projectile-mode weapon fires.
   Fire(weapon) {
-    // Muzzle origin: the socketed gun's pivot, nudged forward; fall back to the camera.
     const dir = this._dir
     const target = this.controls && this.controls.aimTarget
     const valid = this.controls && this.controls.aimTargetValid
@@ -129,8 +138,8 @@ export default class ProjectileSystem extends Component {
     else if (this.camera) this.camera.getWorldDirection(dir)
     if (dir.lengthSq() < 1e-6) dir.set(0, 0, -1)
     dir.normalize()
-    // Per-axis spread so the stream scatters like the original (tighter while aiming).
-    const spread = (weapon.spread ?? 0.02) * (this.controls && this.controls.aiming ? 0.25 : 1)
+    // Per-axis spread (tighter while aiming).
+    const spread = (weapon.projectileSpread ?? 0.02) * (this.controls && this.controls.aiming ? 0.25 : 1)
     if (spread > 1e-5) {
       dir.x += (Math.random() - 0.5) * spread
       dir.y += (Math.random() - 0.5) * spread
@@ -139,7 +148,7 @@ export default class ProjectileSystem extends Component {
     }
     this._origin.addScaledVector(dir, 0.4)
 
-    const style = weapon.bulletStyle || 'green'
+    const style = weapon.bulletStyle   // 'green' | 'blue' | null
     const speed = weapon.projectileSpeed || 45
     const cfg = TYPE_CFG[weapon.projectileType] || TYPE_CFG.default
 
@@ -153,23 +162,42 @@ export default class ProjectileSystem extends Component {
     u.gravity = cfg.gravity
     u.color = weapon.projectileColor ?? COLORS.lime
     u.knockback = weapon.knockback ?? 0
-    u.core.material = style === 'blue' ? this.blueCore : this.greenCore
-    u.glow.material = style === 'blue' ? this.blueGlow : this.greenGlow
-    const s = Math.max(0.72, (weapon.projectileRadius || 0.18) * 4.2)
-    u.coreScale = s; u.glowScale = s * 2
-    u.core.scale.set(s, s, 1)
-    u.glow.scale.set(s * 2, s * 2, 1)
+    u.status = weapon.fx && weapon.fx.status ? weapon.fx.status : null
+    u.radius = weapon.projectileRadius || 0.18
+    u.aoe = !!weapon.aoe
+    u.aoeRadius = weapon.aoeRadius || 3.0
+
+    if (style) {
+      u.sprite = true
+      u.core.visible = true; u.glow.visible = true
+      u.meshCore.visible = false; u.meshGlow.visible = false
+      u.core.material = style === 'blue' ? this.blueCore : this.greenCore
+      u.glow.material = style === 'blue' ? this.blueGlow : this.greenGlow
+      const s = Math.max(0.72, u.radius * 4.2)
+      u.coreScale = s; u.glowScale = s * 2
+      u.core.scale.set(s, s, 1); u.glow.scale.set(s * 2, s * 2, 1)
+    } else {
+      u.sprite = false
+      u.core.visible = false; u.glow.visible = false
+      u.meshCore.visible = true; u.meshGlow.visible = true
+      u.meshCore.material.color.setHex(u.color)
+      u.meshGlow.material.color.setHex(u.color)
+      const s = Math.max(0.6, u.radius / 0.15)
+      u.coreScale = s
+      u.meshCore.scale.setScalar(s); u.meshGlow.scale.setScalar(s * 1.4)
+    }
+
     p.position.copy(this._origin)
+    p.rotation.set(0, 0, 0)
     p.visible = true
   }
 
   Update(dt) {
-    // Advance the shared sprite frame.
     this._animTime = (this._animTime + dt * SHEET.fps) % SHEET.frames
     const nf = Math.floor(this._animTime)
     if (nf !== this._frame) this.setFrame(nf)
 
-    const player = this.parent   // the player entity (used as 'from' for hits)
+    const player = this.parent
     for (const p of this.projectiles) {
       const u = p.userData
       if (!u.active) continue
@@ -178,15 +206,17 @@ export default class ProjectileSystem extends Component {
       if (u.gravity) u.velocity.y -= u.gravity * dt
       p.position.addScaledVector(u.velocity, dt)
 
-      // Sprite pulse.
       const pulse = 1 + Math.sin(u.lifetime * 36) * 0.08
-      u.core.scale.setScalar(u.coreScale * pulse)
-      u.glow.scale.setScalar(u.glowScale * (1 + Math.sin(u.lifetime * 22) * 0.14))
+      if (u.sprite) {
+        u.core.scale.setScalar(u.coreScale * pulse)
+        u.glow.scale.setScalar(u.glowScale * (1 + Math.sin(u.lifetime * 22) * 0.14))
+      } else {
+        u.meshCore.scale.setScalar(u.coreScale * pulse)
+        p.rotation.z += dt * 2
+      }
 
-      // Ground / stray bolt.
       if (p.position.y <= 0.03) { this.deactivate(p); continue }
 
-      // Sphere hit-test against live zombies (body-centre, like the original).
       let hit = false
       for (const z of activeZombies) {
         if (!z.alive || z.dying) continue
@@ -198,10 +228,24 @@ export default class ProjectileSystem extends Component {
           z.parent.Broadcast({
             topic: 'hit', amount: u.damage, from: player,
             knockbackDir: this._dir, knockbackStrength: u.knockback,
+            status: u.status ? { ...u.status } : null,
             hitResult: { intersectionPoint: p.position.clone(), intersectionNormal: this._dir.clone().multiplyScalar(-1) },
           })
-          // Green-blood impact burst at the hit point (the on-hit VFX).
           if (this.fx) this.fx.SpawnGreenBloodImpact(p.position, { scale: 0.9 })
+          // AoE (rocket): splash-damage nearby zombies with falloff.
+          if (u.aoe) {
+            for (const other of activeZombies) {
+              if (other === z || !other.alive || other.dying) continue
+              const ox = other.root.position.x - p.position.x
+              const oy = (other.hitCenterY ?? 1) - p.position.y
+              const oz = other.root.position.z - p.position.z
+              const d2 = ox * ox + oy * oy + oz * oz
+              if (d2 < u.aoeRadius * u.aoeRadius) {
+                const falloff = 1 - Math.sqrt(d2) / u.aoeRadius
+                other.parent.Broadcast({ topic: 'hit', amount: u.damage * falloff * 0.6, from: player, status: u.status ? { ...u.status } : null })
+              }
+            }
+          }
           hit = true
           break
         }
@@ -215,7 +259,6 @@ export default class ProjectileSystem extends Component {
   updateBulletLights() {
     this._cand.length = 0
     for (const p of this.projectiles) if (p.userData.active) this._cand.push(p)
-    // Park lights on the nearest few bolts (constant light count => no shader recompiles).
     const cam = this.camera ? this.camera.position : null
     if (cam) this._cand.sort((a, b) => a.position.distanceToSquared(cam) - b.position.distanceToSquared(cam))
     for (let i = 0; i < this.bulletLights.length; i++) {

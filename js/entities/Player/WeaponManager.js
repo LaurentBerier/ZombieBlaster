@@ -3,6 +3,7 @@ import Component from '../../Component.js'
 import Input from '../../Input.js'
 
 import Weapon from './Weapon.js'
+import { WEAPON_DEFS } from '../Weapons/weaponDefs.js'
 
 
 // Owns the weapon loadout and swaps weapons on the Hands viewmodel's socket bone.
@@ -10,7 +11,7 @@ import Weapon from './Weapon.js'
 // next to the same hand socket, reusing the shared arm animations. Adding a real
 // weapon later = one registry entry + a mesh.
 export default class WeaponManager extends Component{
-    constructor(camera, world, flash, shotSoundBuffer, audioListner){
+    constructor(camera, world, flash, shotSoundBuffer, audioListner, weaponRuntimes = []){
         super();
         this.name = 'WeaponManager';
         this.camera = camera;
@@ -18,6 +19,9 @@ export default class WeaponManager extends Component{
         this.flash = flash;
         this.shotSoundBuffer = shotSoundBuffer;
         this.audioListner = audioListner;
+        // [{ def, mesh }] — the funky arsenal: each entry's visible GLB is swapped onto the
+        // hand by PlayerBody on equip; the def carries the fire params + grip.
+        this.weaponRuntimes = weaponRuntimes;
 
         this.weapons = [];
         this.activeIndex = -1;
@@ -202,18 +206,19 @@ export default class WeaponManager extends Component{
     BuildLoadout(){
         // The fire-logic mesh is the AK skinned mesh on the arms metarig — it drives the
         // shoot/reload FSM (mag drop, slider) and stays invisible in normal play; the
-        // VISIBLE gun is the body's socketed weapon (the Franken-Gun GLB, see entry.js).
+        // VISIBLE gun is the body's socketed weapon, swapped per weapon on equip.
         const akMesh = this.hands.GetSkinnedWeaponMesh();
 
-        // The Franken-Gun: keeps its projectile firing (pooled animated sprite bolts via
-        // ProjectileSystem) but adopts the rifle rig — hand attachment, aim-IK, HUD, FSM.
-        const franken = new Weapon('FRANKEN-GUN', akMesh, {
-            fireRate: 0.15, damage: 15, magSize: 30, infiniteAmmo: true,
-            fireMode: 'projectile', projectileSpeed: 45, projectileType: 'plasma',
-            projectileRadius: 0.18, projectileColor: 0x7FFF00, bulletStyle: 'green', knockback: 3.0,
-        });
-
-        this.weapons = [franken];
+        // Build a projectile Weapon per registry entry (the funky arsenal). All share the
+        // invisible arms mesh for the FSM; each keeps its own fire params + bolt style.
+        const defs = this.weaponRuntimes.length ? this.weaponRuntimes.map(r => r.def) : WEAPON_DEFS;
+        this.weapons = defs.map(def => new Weapon(def.name, akMesh, {
+            fireRate: def.fireRate, damage: def.damage, magSize: def.magSize, infiniteAmmo: true,
+            fireMode: 'projectile', projectileSpeed: def.projectileSpeed, projectileType: def.projectileType,
+            projectileRadius: def.projectileRadius, projectileColor: def.projectileColor,
+            bulletStyle: def.bulletStyle, knockback: def.knockback, spread: def.spread,
+            aoe: def.aoe, aoeRadius: def.aoeRadius, fx: def.fx,
+        }));
         for(const weapon of this.weapons){
             weapon.owner = this.parent;
             weapon.Init({
@@ -243,6 +248,13 @@ export default class WeaponManager extends Component{
         this.activeIndex = index;
         const weapon = this.active;
         weapon.Attach();
+
+        // Swap the VISIBLE in-hand gun to this weapon's GLB + grip (PlayerBody reseats it in
+        // the hand pivot, updates the TPS grip seat, and re-resolves the aim-IK sockets).
+        const runtime = this.weaponRuntimes[index];
+        if(this.body && this.body.SetVisibleWeapon && runtime){
+            this.body.SetVisibleWeapon(runtime.mesh, runtime.def.grip);
+        }
 
         // Re-point the aim-IK at the new weapon: reseed the aim low-pass (OnWeaponChanged) so a swap
         // WHILE aiming glides instead of snapping, then apply any per-weapon overrides. Grip sockets are
@@ -347,6 +359,10 @@ export default class WeaponManager extends Component{
                 this.EquipWeapon(0);
             }else if(e.code == 'Digit2'){
                 this.EquipWeapon(1);
+            }else if(e.code == 'Digit3'){
+                this.EquipWeapon(2);
+            }else if(e.code == 'Digit4'){
+                this.EquipWeapon(3);
             }
         });
 

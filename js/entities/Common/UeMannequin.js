@@ -102,6 +102,45 @@ const WEAPON_GRIP_FPS_AIM = {
     ),
 };
 
+// Seat a weapon mesh into `pivot`: clear any previous gun, recentre the new gun so its
+// bbox centre sits on the pivot origin, auto-scale so its longest side ~= WEAPON_LENGTH_CM,
+// then place the pivot at the given hand-local `grip`. Measured in ISOLATION (a temp identity
+// holder) so it's correct whether the pivot is free (build time) or already socketed to the
+// hand (runtime weapon swap). Used by buildUeMannequin AND PlayerBody.SetVisibleWeapon.
+export function seatWeaponMesh(pivot, weapon, grip, meshes = null){
+    for(let i = pivot.children.length - 1; i >= 0; i--){ pivot.remove(pivot.children[i]); }
+
+    // Measure the gun's bbox with an identity parent (independent of where the pivot lives).
+    weapon.position.set(0, 0, 0);
+    weapon.quaternion.identity();
+    const holder = new THREE.Group();
+    holder.add(weapon);
+    holder.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(weapon);
+    const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+    const longest = Math.max(size.x, size.y, size.z) || 1;
+    weapon.position.sub(center);         // gun centre -> pivot origin
+    holder.remove(weapon);
+
+    pivot.add(weapon);
+    pivot.scale.setScalar(WEAPON_LENGTH_CM / longest);
+    pivot.position.copy(grip.position);
+    pivot.quaternion.setFromEuler(grip.rotationEuler);
+    pivot.traverse(child => {
+        if(child.isMesh){
+            child.castShadow = true;
+            child.receiveShadow = true;
+            child.frustumCulled = false;   // skinned/animated bounds go stale
+            // Per-instance material so one avatar's weapon tint/fade doesn't bleed to clones.
+            child.material = Array.isArray(child.material)
+                ? child.material.map(m => m.clone())
+                : child.material.clone();
+            if(meshes){ meshes.push(child); }
+        }
+    });
+}
+
 // Build the runtime-ready avatar from a freshly-cloned GLB scene.
 //   model    : SkeletonUtils.clone() of the loaded SK_Mannequin.glb scene
 //   textures : optional { bodyColor, bodyNormal, logoColor, logoNormal } THREE.Textures
@@ -188,44 +227,10 @@ export function buildUeMannequin(model, { textures = null, weapon = null, preOri
     });
 
     if(weapon && handBone){
-        // Drop the weapon into a pivot group and recentre it so the gun's geometry
-        // sits ON the pivot origin, cancelling the FBX's off-centre pivot. Measure
-        // the bbox while the pivot is still at identity (world space == pivot-local
-        // space), shift the weapon by -centre, then transform the pivot.
+        // Socket the gun into a pivot at the default grip (recenter + auto-scale in the
+        // shared helper, so the runtime weapon swap seats new guns identically).
         const pivot = new THREE.Group();
-        pivot.add(weapon);
-        pivot.updateMatrixWorld(true);
-        const box = new THREE.Box3().setFromObject(weapon);
-        const size = box.getSize(new THREE.Vector3());
-        const center = box.getCenter(new THREE.Vector3());
-        const longest = Math.max(size.x, size.y, size.z) || 1;
-        weapon.position.sub(center);                       // gun centre -> pivot origin
-
-        // Auto-normalize size: scale so the longest bbox side ≈ WEAPON_LENGTH_CM in
-        // the hand's centimetre space, regardless of the FBX's native units, then
-        // seat the centred gun in the grip.
-        pivot.scale.setScalar(WEAPON_LENGTH_CM / longest);
-        pivot.position.copy(WEAPON_GRIP.position);
-        pivot.quaternion.setFromEuler(WEAPON_GRIP.rotationEuler);
-
-        pivot.traverse(child => {
-            if(child.isMesh){
-                child.castShadow = true;
-                child.receiveShadow = true;
-                child.frustumCulled = false;   // skinned AK bounds also go stale
-                // Per-instance material, same reason as the body meshes above:
-                // SkeletonUtils.clone shares the AK material across every avatar, so
-                // without this the soldier's death fade (material.opacity -> 0) would
-                // also fade the player's (and other soldiers') gun. Clone so each
-                // avatar owns its weapon material.
-                child.material = Array.isArray(child.material)
-                    ? child.material.map(m => m.clone())
-                    : child.material.clone();
-                // Sits inside the rig, so it must follow the same layer toggles as the
-                // body meshes — registering it here lets callers treat it uniformly.
-                meshes.push(child);
-            }
-        });
+        seatWeaponMesh(pivot, weapon, WEAPON_GRIP, meshes);
         handBone.add(pivot);
         weaponPivot = pivot;
     }

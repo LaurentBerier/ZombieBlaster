@@ -36,6 +36,7 @@ import ArenaSetup from './entities/Level/ArenaSetup.js'
 import ZombieSpawner from './entities/NPC/ZombieSpawner.js'
 import ProjectileSystem from './entities/Weapons/ProjectileSystem.js'
 import Fx from './entities/Fx/Fx.js'
+import { WEAPON_DEFS, WEAPON_GLBS } from './entities/Weapons/weaponDefs.js'
 import { adaptClipToPreOriented } from './entities/Common/UeMannequin.js'
 
 // --- Buildless asset URLs (relative to index.html). ---
@@ -201,7 +202,10 @@ class FPSGameApp {
     promises.push(this.AddAsset(zombieAttack, gltfLoader, 'zombieAttack'))
     promises.push(this.AddAsset(zombieDeath, gltfLoader, 'zombieDeath'))
     // Funky weapon + its sprite-bullet sheet.
-    promises.push(this.AddAsset(frankenGun, gltfLoader, 'frankenGun'))
+    // The full funky arsenal (Franken / Bowling / Soda / Cryo GLBs), keyed by registry glbKey.
+    for (const [key, url] of Object.entries(WEAPON_GLBS)) {
+      promises.push(this.AddAsset(url, gltfLoader, key))
+    }
     promises.push(this.AddAsset(frankenSheet, texLoader, 'frankenSheet'))
     promises.push(this.AddAsset(greenBloodSheet, texLoader, 'greenBloodSheet'))
 
@@ -215,6 +219,10 @@ class FPSGameApp {
       attack: this.assets['zombieAttack'].animations[0],
       death: this.assets['zombieDeath'].animations[0],
     }
+
+    // The funky arsenal: one runtime per registry entry, each with its own cloned visible GLB
+    // (swapped onto the hand by PlayerBody on weapon switch) + the def (fire params + grip).
+    this.weaponRuntimes = WEAPON_DEFS.map(def => ({ def, mesh: this.assets[def.glbKey].scene.clone(true) }))
 
     this.assets['muzzleFlash'] = this.assets['muzzleFlash'].scene
     // The FP arms viewmodel (Hands) reads its idle/shoot/reload clips off the scene's
@@ -302,10 +310,10 @@ class FPSGameApp {
     // magReload clip is null — the Franken-Gun has no 'Magazine' bone to animate.
     playerEntity.AddComponent(new PlayerBody(
       SkeletonUtils.clone(this.ueModel), this.ueAnims, this.scene, this.camera,
-      this.ueTextures, this.assets['frankenGun'].scene.clone(true), true, null
+      this.ueTextures, this.weaponRuntimes[0].mesh, true, null
     ))
     playerEntity.AddComponent(new Hands(this.camera, this.assets['ak47'].scene))
-    playerEntity.AddComponent(new WeaponManager(this.camera, this.physicsWorld, this.assets['muzzleFlash'], this.assets['ak47Shot'], this.listener))
+    playerEntity.AddComponent(new WeaponManager(this.camera, this.physicsWorld, this.assets['muzzleFlash'], this.assets['ak47Shot'], this.listener, this.weaponRuntimes))
     playerEntity.AddComponent(new ProjectileSystem(this.scene, this.assets['frankenSheet']))
     playerEntity.AddComponent(new PlayerHealth())
     playerEntity.AddComponent(new WeaponPlacementDebug())

@@ -23,6 +23,8 @@ const ZOMBIE_EXTRA_SCALE = 0.01
 const ZOMBIE_GROUND_OFFSET = 0.08
 const ENEMY_TOP_Y = 2.0
 const KNOCKBACK_DECAY = 0.0025
+// Movement/animation slow while a status is active (shock/freeze stagger; DoT types don't slow).
+const STATUS_SPEED_MULT = { shock: 0.3, freeze: 0.5, burn: 1.0, corrode: 1.0 }
 
 const _bbox = new THREE.Box3()
 const _bboxSize = new THREE.Vector3()
@@ -50,6 +52,7 @@ export default class ZombieController extends Component {
     this.attackTimer = 0
     this.hitFlashTimer = 0
     this.knockbackVel = new THREE.Vector3()
+    this.statusEffect = { type: null, duration: 0, dpsTimer: 0, dps: 0 }
 
     this.health = this.stats.health
     this.maxHealth = this.stats.health
@@ -146,6 +149,13 @@ export default class ZombieController extends Component {
     if (msg && msg.knockbackDir && msg.knockbackStrength) {
       this.knockbackVel.copy(msg.knockbackDir).setY(0).normalize().multiplyScalar(msg.knockbackStrength)
     }
+    // Status effect (max-duration stacking on same type): shock/freeze slow, burn/corrode DoT.
+    if (msg && msg.status && msg.status.type) {
+      const s = this.statusEffect, inc = msg.status
+      if (s.type !== inc.type || inc.duration > s.duration) {
+        s.type = inc.type; s.duration = inc.duration; s.dps = inc.dps || 0; s.dpsTimer = 0
+      }
+    }
     if (this.health <= 0) this.Die(msg)
   }
 
@@ -187,7 +197,24 @@ export default class ZombieController extends Component {
       return
     }
 
-    if (this.mixer) this.mixer.update(dt)
+    // Status effect: shock/freeze slow the shamble + animation; burn/corrode tick damage.
+    const status = this.statusEffect
+    const speedMult = STATUS_SPEED_MULT[status.type] ?? 1.0
+    if (status.type && status.duration > 0) {
+      status.duration -= dt
+      if (status.dps > 0) {
+        status.dpsTimer += dt
+        if (status.dpsTimer >= 0.25) {
+          status.dpsTimer = 0
+          this.hitFlashTimer = Math.max(this.hitFlashTimer, 0.08)
+          this.health -= status.dps * 0.25
+          if (this.health <= 0) { this.Die({}); return }
+        }
+      }
+      if (status.duration <= 0) { status.type = null; status.dps = 0 }
+    }
+
+    if (this.mixer) this.mixer.update(dt * speedMult)
 
     // Hit-flash squash (from a stable base so repeated hits don't drift).
     if (this.hitFlashTimer > 0) {
@@ -234,8 +261,9 @@ export default class ZombieController extends Component {
     const preX = this.root.position.x, preZ = this.root.position.z
     if (chasing) {
       toPlayer.normalize()
-      this.root.position.x += toPlayer.x * this.speed * dt
-      this.root.position.z += toPlayer.z * this.speed * dt
+      const eff = this.speed * speedMult
+      this.root.position.x += toPlayer.x * eff * dt
+      this.root.position.z += toPlayer.z * eff * dt
       this.root.rotation.y = Math.atan2(toPlayer.x, toPlayer.z)
     } else if (!stunned) {
       // Melee: chip the player on cooldown while in range.

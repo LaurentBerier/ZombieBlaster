@@ -48,8 +48,11 @@ export default class Weapon{
         this.projectileType = config.projectileType ?? 'plasma';
         this.projectileRadius = config.projectileRadius ?? 0.18;
         this.projectileColor = config.projectileColor ?? null;
-        this.bulletStyle = config.bulletStyle ?? null;   // 'green' | 'blue' => animated sprite bolt
+        this.bulletStyle = config.bulletStyle ?? null;   // 'green' | 'blue' => animated sprite bolt; null => mesh bolt
         this.knockback = config.knockback ?? 0;
+        this.projectileSpread = config.spread ?? 0.02;   // per-axis bolt jitter (separate from the hitscan cone)
+        this.aoe = config.aoe ?? false;
+        this.aoeRadius = config.aoeRadius ?? 0;
         this.fx = config.fx ?? null;
 
         this.shoot = false;
