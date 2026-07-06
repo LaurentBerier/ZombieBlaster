@@ -35,6 +35,7 @@ import UIManager from './entities/UI/UIManager.js'
 import ArenaSetup from './entities/Level/ArenaSetup.js'
 import ZombieSpawner from './entities/NPC/ZombieSpawner.js'
 import ProjectileSystem from './entities/Weapons/ProjectileSystem.js'
+import Fx from './entities/Fx/Fx.js'
 import { adaptClipToPreOriented } from './entities/Common/UeMannequin.js'
 
 // --- Buildless asset URLs (relative to index.html). ---
@@ -57,6 +58,8 @@ const zombieDeath = 'assets/Characters/Zombie_1/Zombie_1__Dead.glb'
 // sheet its bolts render with (the signature look), reused RGB-rotated for Soda later.
 const frankenGun = 'assets/Weapons/1_Neon_Biohazard_Blaste_0415181024_texture.glb'
 const frankenSheet = 'assets/FX/LiquidSpriteSheet2.png'
+// Green-blood impact burst spritesheet (8-frame 4x2 atlas) — the on-hit VFX.
+const greenBloodSheet = 'assets/FX/Green_Spill_juice_SpriteSheet3.png'
 
 // Third-person weapon (socketed to the hand) + its magazine-reload clip.
 const ak47Tps = 'assets/guns/New/SK_AK47.FBX'
@@ -200,6 +203,7 @@ class FPSGameApp {
     // Funky weapon + its sprite-bullet sheet.
     promises.push(this.AddAsset(frankenGun, gltfLoader, 'frankenGun'))
     promises.push(this.AddAsset(frankenSheet, texLoader, 'frankenSheet'))
+    promises.push(this.AddAsset(greenBloodSheet, texLoader, 'greenBloodSheet'))
 
     await this.PromiseProgress(promises, this.OnProgress)
 
@@ -284,6 +288,7 @@ class FPSGameApp {
     const levelEntity = new Entity()
     levelEntity.SetName('Level')
     levelEntity.AddComponent(new ArenaSetup(this.scene, this.physicsWorld))
+    levelEntity.AddComponent(new Fx(this.scene, this.assets['greenBloodSheet']))
     this.entityManager.Add(levelEntity)
 
     const playerEntity = new Entity()

@@ -42,6 +42,7 @@ export default class ProjectileSystem extends Component {
     this.controls = this.GetComponent('PlayerControls')
     this.body = this.GetComponent('PlayerBody')
     this.camera = this.controls ? this.controls.camera : null
+    this.fx = this.FindEntity('Level') ? this.FindEntity('Level').GetComponent('Fx') : null
 
     this.buildSpriteMaterials()
     this.buildPool()
@@ -199,6 +200,8 @@ export default class ProjectileSystem extends Component {
             knockbackDir: this._dir, knockbackStrength: u.knockback,
             hitResult: { intersectionPoint: p.position.clone(), intersectionNormal: this._dir.clone().multiplyScalar(-1) },
           })
+          // Green-blood impact burst at the hit point (the on-hit VFX).
+          if (this.fx) this.fx.SpawnGreenBloodImpact(p.position, { scale: 0.9 })
           hit = true
           break
         }
