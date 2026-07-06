@@ -187,6 +187,19 @@ class FPSGameApp {
     const texLoader = new THREE.TextureLoader()
     const promises = []
 
+    // Fetch the REAL level (data/levelData.json) + the asset-kit manifest, then queue every
+    // unique designer custom-prop GLB for preload (cloned per placement by ArenaSetup).
+    this.levelData = await fetch('data/levelData.json', { cache: 'no-store' }).then(r => r.json()).catch(() => ({}))
+    this.kitMap = await fetch('data/assetKits.json', { cache: 'no-store' }).then(r => r.json()).catch(() => ({}))
+    this.propCache = new Map()
+    const propUrls = new Set()
+    for (const p of (this.levelData.customProps || [])) {
+      if (p && p.asset) propUrls.add(`assets/${this.kitMap[p.asset] ?? 'CorridorKit'}/${p.asset}`)
+    }
+    for (const url of propUrls) {
+      promises.push(gltfLoader.loadAsync(url).then(g => this.propCache.set(url, g.scene)).catch(e => console.warn('[prop] load failed:', url, e.message)))
+    }
+
     promises.push(this.AddAsset(ueChar, gltfLoader, 'ueChar'))
     promises.push(this.AddAsset(ueClipsSrc, gltfLoader, 'ueClips'))
     promises.push(this.AddAsset(ueRollSrc, gltfLoader, 'ueRoll'))
@@ -295,7 +308,7 @@ class FPSGameApp {
     // components that look it up (PlayerHealth's BloodFx, later the FX/Decals) resolve.
     const levelEntity = new Entity()
     levelEntity.SetName('Level')
-    levelEntity.AddComponent(new ArenaSetup(this.scene, this.physicsWorld))
+    levelEntity.AddComponent(new ArenaSetup(this.scene, this.physicsWorld, this.levelData, this.propCache, this.kitMap))
     levelEntity.AddComponent(new Fx(this.scene, this.assets['greenBloodSheet']))
     this.entityManager.Add(levelEntity)
 
@@ -318,9 +331,9 @@ class FPSGameApp {
     playerEntity.AddComponent(new PlayerHealth())
     playerEntity.AddComponent(new WeaponPlacementDebug())
     playerEntity.AddComponent(new WeaponAimDebug())
-    // Spawn in a clear patch of floor (away from the props/platform pillars), facing
-    // down the room (-Z) so the arena reads on spawn.
-    playerEntity.SetPosition(new THREE.Vector3(0, 1.6, -6))
+    // Spawn at the designer's player-spawn from the level data (capsule settles onto the floor).
+    const ps = (this.levelData && this.levelData.playerSpawn) || { x: 0, y: 1.6, z: 0 }
+    playerEntity.SetPosition(new THREE.Vector3(ps.x, Math.max(1.5, ps.y), ps.z))
     this.entityManager.Add(playerEntity)
 
     const uimanagerEntity = new Entity()
