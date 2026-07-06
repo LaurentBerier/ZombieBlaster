@@ -471,10 +471,23 @@ export default class PlayerControls extends Component{
         document.addEventListener('pointerlockchange', this.OnPointerlockChange)
 
         Input.AddClickListner( () => {
-            if(!this.isLocked){
+            // Only grab the pointer during live gameplay — never while a menu/overlay is up, or
+            // clicking the title / pause / game-over / controls screens would lock the pointer and
+            // hide the cursor (you couldn't press the buttons).
+            if(!this.isLocked && !this.IsMenuOpen()){
                 document.body.requestPointerLock();
             }
         });
+    }
+
+    // True while any full-screen menu/overlay is showing (display != none). Gates pointer lock.
+    IsMenuOpen(){
+        const ids = ['title-screen','loading-screen','gameover-screen','pause-screen','controls-overlay','settings-overlay'];
+        for(const id of ids){
+            const el = document.getElementById(id);
+            if(el && getComputedStyle(el).display !== 'none'){ return true; }
+        }
+        return false;
     }
 
     OnPointerlockChange = () => {

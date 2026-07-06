@@ -57,7 +57,7 @@ try {
     ph.health = 0;
     return { sameRef: dir.playerHealth===ph, dirHasPh: !!dir.playerHealth, hasCb: !!dir.onGameOver, goBefore: dir.state.gameOver };
   });
-  await sleep(600);
+  await sleep(1000);   // headless ~4fps: give the loop time to tick GameOver before asserting
   const goState = await page.evaluate(()=>({ gameOver: window._APP.entityManager.Get('GameDirector').GetComponent('GameDirector').state.gameOver }));
   log('deathDiag', JSON.stringify(deathDiag), 'goState', JSON.stringify(goState));
   const goShown = await vis(page,'gameover-screen');

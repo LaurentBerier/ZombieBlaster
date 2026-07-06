@@ -91,6 +91,8 @@ class FPSGameApp {
     this.lastFrameTime = null
     this.assets = {}
     this.animFrameId = 0
+    this.playing = false   // true only during live gameplay (gates pointer lock + pause)
+    this.paused = false
     AmmoHelper.Init(() => { this.Init() })
   }
 
@@ -169,10 +171,34 @@ class FPSGameApp {
     document.getElementById('btn-start')?.addEventListener('click', this.StartGame)
     document.getElementById('btn-retry')?.addEventListener('click', this.StartGame)
     document.getElementById('btn-menu')?.addEventListener('click', this.QuitToMenu)
-    // Controls overlay (simple show/hide).
+    // Controls overlay (simple show/hide) — reachable from the title AND the pause screen.
     const controls = document.getElementById('controls-overlay')
     document.getElementById('btn-controls')?.addEventListener('click', () => controls?.classList.remove('hidden'))
+    document.getElementById('btn-pause-controls')?.addEventListener('click', () => controls?.classList.remove('hidden'))
     document.getElementById('btn-close-controls')?.addEventListener('click', () => controls?.classList.add('hidden'))
+    // Pause screen.
+    document.getElementById('btn-resume')?.addEventListener('click', this.ResumeGame)
+    document.getElementById('btn-quit')?.addEventListener('click', this.QuitToMenu)
+    // Losing the pointer lock during live gameplay (Esc) pauses the game.
+    document.addEventListener('pointerlockchange', () => {
+      if (!document.pointerLockElement && this.playing && !this.paused) this.PauseGame()
+    })
+  }
+
+  // ---- Pause ----
+  PauseGame = () => {
+    if (!this.playing || this.paused) return
+    this.paused = true
+    this._toggleHidden('pause-screen', true)   // cursor is already free (pointer unlocked)
+  }
+
+  ResumeGame = () => {
+    if (!this.paused) return
+    this.paused = false
+    this._toggleHidden('pause-screen', false)
+    document.getElementById('controls-overlay')?.classList.add('hidden')
+    // Re-grab the pointer (this click is the required user gesture).
+    if (document.body.requestPointerLock) document.body.requestPointerLock()
   }
 
   _toggleHidden(id, visible) { const el = document.getElementById(id); if (el) el.classList.toggle('hidden', !visible) }
@@ -195,6 +221,11 @@ class FPSGameApp {
   // Called by the GameDirector when the player dies: reveal the game-over screen + free the
   // cursor so the retry/menu buttons are clickable.
   OnGameOver = (state) => {
+    // Stop gameplay BEFORE releasing the pointer, so the pointerlockchange handler doesn't
+    // mistake the game-over unlock for a pause.
+    this.playing = false
+    this.paused = false
+    this._toggleHidden('pause-screen', false)
     const ui = this.entityManager?.Get('UIManager')?.GetComponent('UIManager')
     ui && ui.ShowGameOver(state)
     if (document.exitPointerLock) document.exitPointerLock()
@@ -203,9 +234,13 @@ class FPSGameApp {
   // Back to the title screen from the game-over screen.
   QuitToMenu = async () => {
     if (this.starting) return
+    this.playing = false
+    this.paused = false
     this.entityManager?.Get('Audio')?.GetComponent('AudioManager')?.StopMusic()
+    if (document.exitPointerLock && document.pointerLockElement) document.exitPointerLock()
     await this.FadeTo(true)
     window.cancelAnimationFrame(this.animFrameId)
+    this._toggleHidden('pause-screen', false)
     this._toggleHidden('gameover-screen', false)
     this._toggleHidden('hud', false)
     this.scene.clear()
@@ -432,10 +467,13 @@ class FPSGameApp {
   StartGame = async () => {
     if (this.starting || !this.assetsReady) { return }
     this.starting = true
+    this.playing = false
+    this.paused = false
     await this.FadeTo(true)
-    // Hide the title + any lingering game-over screen (retry path).
+    // Hide the title + any lingering game-over / pause / controls screens (retry path).
     this.ShowMenu(false)
     this._toggleHidden('gameover-screen', false)
+    this._toggleHidden('pause-screen', false)
     document.getElementById('controls-overlay')?.classList.add('hidden')
     this.ShowLoading(true)
     await this.FadeTo(false)
@@ -460,6 +498,8 @@ class FPSGameApp {
     this.ShowMenu(false)
     await this.FadeTo(false)
     this.starting = false
+    this.paused = false
+    this.playing = true    // gameplay is live — clicks now grab the pointer; Esc pauses
   }
 
   // Lights live outside SetupGraphics so StartGame can restore them after scene.clear().
@@ -501,8 +541,12 @@ class FPSGameApp {
   }
 
   Step(elapsedTime) {
-    this.physicsWorld.stepSimulation(elapsedTime, 10)
-    this.entityManager.Update(elapsedTime)
+    // Frozen while paused — keep rendering the last frame, but stop physics + all component
+    // updates (the wave director, zombies, weapons all halt).
+    if (!this.paused) {
+      this.physicsWorld.stepSimulation(elapsedTime, 10)
+      this.entityManager.Update(elapsedTime)
+    }
     this.renderer.render(this.scene, this.camera)
     this.stats.update()
   }
