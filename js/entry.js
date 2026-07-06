@@ -34,6 +34,7 @@ import WeaponAimDebug from './entities/Player/WeaponAimDebug.js'
 import UIManager from './entities/UI/UIManager.js'
 import ArenaSetup from './entities/Level/ArenaSetup.js'
 import ZombieSpawner from './entities/NPC/ZombieSpawner.js'
+import ProjectileSystem from './entities/Weapons/ProjectileSystem.js'
 import { adaptClipToPreOriented } from './entities/Common/UeMannequin.js'
 
 // --- Buildless asset URLs (relative to index.html). ---
@@ -50,6 +51,12 @@ const ueCrouchIdleSrc = 'assets/Characters/ue/CrouchIdle.glb'
 const zombieWalk = 'assets/Characters/Zombie_1/Zombie_1_Unsteady_Walk_withSkin.glb'
 const zombieAttack = 'assets/Characters/Zombie_1/Zombie_1__Charged_1.glb'
 const zombieDeath = 'assets/Characters/Zombie_1/Zombie_1__Dead.glb'
+
+// Funky weapon: the Franken-Gun (Neon Biohazard Blaster) GLB — the VISIBLE gun
+// socketed to the hand (aim-IK'd like the rifle) — plus the animated liquid sprite
+// sheet its bolts render with (the signature look), reused RGB-rotated for Soda later.
+const frankenGun = 'assets/Weapons/1_Neon_Biohazard_Blaste_0415181024_texture.glb'
+const frankenSheet = 'assets/FX/LiquidSpriteSheet2.png'
 
 // Third-person weapon (socketed to the hand) + its magazine-reload clip.
 const ak47Tps = 'assets/guns/New/SK_AK47.FBX'
@@ -173,6 +180,7 @@ class FPSGameApp {
         : url)
     const akFbxLoader = new FBXLoader(akManager)
     const audioLoader = new THREE.AudioLoader()
+    const texLoader = new THREE.TextureLoader()
     const promises = []
 
     promises.push(this.AddAsset(ueChar, gltfLoader, 'ueChar'))
@@ -189,6 +197,9 @@ class FPSGameApp {
     promises.push(this.AddAsset(zombieWalk, gltfLoader, 'zombieWalk'))
     promises.push(this.AddAsset(zombieAttack, gltfLoader, 'zombieAttack'))
     promises.push(this.AddAsset(zombieDeath, gltfLoader, 'zombieDeath'))
+    // Funky weapon + its sprite-bullet sheet.
+    promises.push(this.AddAsset(frankenGun, gltfLoader, 'frankenGun'))
+    promises.push(this.AddAsset(frankenSheet, texLoader, 'frankenSheet'))
 
     await this.PromiseProgress(promises, this.OnProgress)
 
@@ -279,12 +290,18 @@ class FPSGameApp {
     playerEntity.SetName('Player')
     playerEntity.AddComponent(new PlayerPhysics(this.physicsWorld, Ammo))
     playerEntity.AddComponent(new PlayerControls(this.camera, this.scene))
+    // The VISIBLE in-hand gun is the Franken-Gun GLB (socketed to hand_r + aim-IK'd by
+    // PlayerBody exactly like the rifle). buildUeMannequin recenters/auto-scales it, and
+    // WeaponAimIK auto-resolves the muzzle/grips from its bbox + the posed hands, so it
+    // aims at the crosshair with no per-weapon ikConfig (tunable later with the ` panel).
+    // magReload clip is null — the Franken-Gun has no 'Magazine' bone to animate.
     playerEntity.AddComponent(new PlayerBody(
       SkeletonUtils.clone(this.ueModel), this.ueAnims, this.scene, this.camera,
-      this.ueTextures, SkeletonUtils.clone(this.assets['ak47Tps']), true, this.akMagReloadClip
+      this.ueTextures, this.assets['frankenGun'].scene.clone(true), true, null
     ))
     playerEntity.AddComponent(new Hands(this.camera, this.assets['ak47'].scene))
     playerEntity.AddComponent(new WeaponManager(this.camera, this.physicsWorld, this.assets['muzzleFlash'], this.assets['ak47Shot'], this.listener))
+    playerEntity.AddComponent(new ProjectileSystem(this.scene, this.assets['frankenSheet']))
     playerEntity.AddComponent(new PlayerHealth())
     playerEntity.AddComponent(new WeaponPlacementDebug())
     playerEntity.AddComponent(new WeaponAimDebug())

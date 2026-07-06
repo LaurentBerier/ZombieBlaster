@@ -43,6 +43,9 @@ export default class WeaponManager extends Component{
         this.uimanager = this.FindEntity('UIManager').GetComponent('UIManager');
         this.controls = this.GetComponent('PlayerControls');
         this.body = this.GetComponent('PlayerBody');
+        // The funky projectile weapons spawn their sprite bolts through this (may be
+        // absent in a hitscan-only build).
+        this.projectiles = this.GetComponent('ProjectileSystem');
 
         this.SetupMuzzleFlash();
         this.SetupSound();
@@ -197,39 +200,20 @@ export default class WeaponManager extends Component{
     }
 
     BuildLoadout(){
-        // Slot 0: the AK skinned mesh straight from the metarig — full reload/fire
-        // animation (the magazine drops, the slider racks).
+        // The fire-logic mesh is the AK skinned mesh on the arms metarig — it drives the
+        // shoot/reload FSM (mag drop, slider) and stays invisible in normal play; the
+        // VISIBLE gun is the body's socketed weapon (the Franken-Gun GLB, see entry.js).
         const akMesh = this.hands.GetSkinnedWeaponMesh();
-        const ak47 = new Weapon('AK-47', akMesh, {
-            fireRate: 0.1, damage: 2, magSize: 30, infiniteAmmo: true,
+
+        // The Franken-Gun: keeps its projectile firing (pooled animated sprite bolts via
+        // ProjectileSystem) but adopts the rifle rig — hand attachment, aim-IK, HUD, FSM.
+        const franken = new Weapon('FRANKEN-GUN', akMesh, {
+            fireRate: 0.15, damage: 15, magSize: 30, infiniteAmmo: true,
+            fireMode: 'projectile', projectileSpeed: 45, projectileType: 'plasma',
+            projectileRadius: 0.18, projectileColor: 0x7FFF00, bulletStyle: 'green', knockback: 3.0,
         });
 
-        // Slot 1: placeholder — a tinted SkinnedMesh clone bound to the SAME metarig,
-        // so it animates identically. Proves the swap with no new art; replace with a
-        // real rigged weapon mesh later (one registry entry).
-        const smgMaterial = Array.isArray(akMesh.material)
-            ? akMesh.material.map(m => this._tint(m))
-            : this._tint(akMesh.material);
-        const smgMesh = new THREE.SkinnedMesh(akMesh.geometry, smgMaterial);
-        smgMesh.bind(akMesh.skeleton, akMesh.bindMatrix);
-        smgMesh.frustumCulled = false;
-        akMesh.parent.add(smgMesh);
-        // Both weapons here share the SAME in-hand AK pivot (the FP meshes aren't rendered), so they
-        // auto-resolve identical aim-IK sockets — no ikConfig needed. A REAL rigged weapon would
-        // declare its own, e.g.:
-        //   ikConfig: {
-        //     rightGrip: new THREE.Vector3(...),  leftGrip: new THREE.Vector3(...),   // pivot-local
-        //     muzzle: new THREE.Vector3(...),     aimSocket: new THREE.Vector3(...),  // pivot-local
-        //     muzzleForwardAxis: new THREE.Vector3(0,0,1),                            // local barrel axis
-        //     LeftHandOffset: new THREE.Vector3(...), RightHandOffset: new THREE.Vector3(...),
-        //     twoHanded: true, AimCorrectionStrength: 1.0,
-        //     MaxAimCorrectionAngle: THREE.MathUtils.degToRad(55),
-        //   }
-        const smg = new Weapon('SMG (placeholder)', smgMesh, {
-            fireRate: 0.06, damage: 1, magSize: 25, infiniteAmmo: true,
-        });
-
-        this.weapons = [ak47, smg];
+        this.weapons = [franken];
         for(const weapon of this.weapons){
             weapon.owner = this.parent;
             weapon.Init({
@@ -403,6 +387,10 @@ export default class WeaponManager extends Component{
             // where the body is hidden) and re-roll the TPS muzzle flash.
             this.Broadcast({topic: 'weapon.shoot'});
             this.TriggerTpsFlash();
+            // Projectile weapons spawn their bolt from the muzzle toward the crosshair here.
+            if(weapon.fireMode === 'projectile' && this.projectiles){
+                this.projectiles.Fire(weapon);
+            }
             // Gunfire is loud: let nearby AI HEAR the shot (hit or miss) so they react instantly
             // instead of only noticing a landed hit / a player who wandered into their view cone.
             this.NotifyNoise();

@@ -40,6 +40,18 @@ export default class Weapon{
         // sockets, muzzle/aim socket, muzzleForwardAxis and hand offsets. See WeaponAimIK.SetWeaponConfig.
         this.ikConfig = config.ikConfig ?? null;
 
+        // Projectile mode (the funky guns): instead of an instantaneous hitscan ray, firing
+        // spawns a pooled sprite bolt (ProjectileSystem) from the muzzle toward the crosshair,
+        // which sphere-tests the zombies and broadcasts the 'hit'. These params drive that bolt.
+        this.fireMode = config.fireMode ?? 'hitscan';
+        this.projectileSpeed = config.projectileSpeed ?? 45;
+        this.projectileType = config.projectileType ?? 'plasma';
+        this.projectileRadius = config.projectileRadius ?? 0.18;
+        this.projectileColor = config.projectileColor ?? null;
+        this.bulletStyle = config.bulletStyle ?? null;   // 'green' | 'blue' => animated sprite bolt
+        this.knockback = config.knockback ?? 0;
+        this.fx = config.fx ?? null;
+
         this.shoot = false;
         this.shootTimer = 0.0;
         this.reloading = false;
@@ -168,7 +180,9 @@ export default class Weapon{
             this.magAmmo = Math.max(0, this.magAmmo - 1);
             this.RefreshUI();
 
-            this.Raycast();
+            // Hitscan weapons cast the ray here; projectile weapons instead have the
+            // WeaponManager spawn a bolt (it reacts to the `fired` return of this call).
+            if(this.fireMode !== 'projectile'){ this.Raycast(); }
 
             this.shotSound.isPlaying && this.shotSound.stop();
             this.shotSound.play();
