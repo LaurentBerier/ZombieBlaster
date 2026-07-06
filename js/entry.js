@@ -31,6 +31,7 @@ import PlayerHealth from './entities/Player/PlayerHealth.js'
 import WeaponPlacementDebug from './entities/Player/WeaponPlacementDebug.js'
 import WeaponAimDebug from './entities/Player/WeaponAimDebug.js'
 import UIManager from './entities/UI/UIManager.js'
+import ArenaSetup from './entities/Level/ArenaSetup.js'
 import { adaptClipToPreOriented } from './entities/Common/UeMannequin.js'
 
 // --- Buildless asset URLs (relative to index.html). ---
@@ -234,36 +235,15 @@ class FPSGameApp {
     await this.FadeTo(false)
   }
 
-  // A large static box collider + a visible plane, so the player capsule has ground to
-  // stand on before the neon arena is built (Step 2 replaces this).
-  AddPlaceholderGround() {
-    const plane = new THREE.Mesh(
-      new THREE.PlaneGeometry(120, 120),
-      new THREE.MeshStandardMaterial({ color: 0x1a1a33, roughness: 0.95, metalness: 0.0 })
-    )
-    plane.rotation.x = -Math.PI / 2
-    plane.receiveShadow = true
-    this.scene.add(plane)
-    // Neon grid for spatial reference.
-    const grid = new THREE.GridHelper(120, 60, 0x00ffff, 0x330066)
-    grid.position.y = 0.01
-    this.scene.add(grid)
-
-    const shape = new Ammo.btBoxShape(new Ammo.btVector3(60, 0.5, 60))
-    const t = new Ammo.btTransform(); t.setIdentity()
-    t.setOrigin(new Ammo.btVector3(0, -0.5, 0))
-    const motion = new Ammo.btDefaultMotionState(t)
-    const inertia = new Ammo.btVector3(0, 0, 0)
-    const info = new Ammo.btRigidBodyConstructionInfo(0, motion, shape, inertia)
-    const body = new Ammo.btRigidBody(info)
-    body.setFriction(1)
-    this.physicsWorld.addRigidBody(body, CollisionFilterGroups.StaticFilter, CollisionFilterGroups.AllFilter)
-  }
-
   EntitySetup() {
     this.entityManager = new EntityManager()
 
-    this.AddPlaceholderGround()
+    // The neon arena (visible geometry + Ammo static colliders). Named 'Level' so
+    // components that look it up (PlayerHealth's BloodFx, later the FX/Decals) resolve.
+    const levelEntity = new Entity()
+    levelEntity.SetName('Level')
+    levelEntity.AddComponent(new ArenaSetup(this.scene, this.physicsWorld))
+    this.entityManager.Add(levelEntity)
 
     const playerEntity = new Entity()
     playerEntity.SetName('Player')
@@ -278,7 +258,9 @@ class FPSGameApp {
     playerEntity.AddComponent(new PlayerHealth())
     playerEntity.AddComponent(new WeaponPlacementDebug())
     playerEntity.AddComponent(new WeaponAimDebug())
-    playerEntity.SetPosition(new THREE.Vector3(0, 1.6, 0))
+    // Spawn in a clear patch of floor (away from the props/platform pillars), facing
+    // down the room (-Z) so the arena reads on spawn.
+    playerEntity.SetPosition(new THREE.Vector3(0, 1.6, -6))
     this.entityManager.Add(playerEntity)
 
     const uimanagerEntity = new Entity()
@@ -317,11 +299,13 @@ class FPSGameApp {
   }
 
   // Lights live outside SetupGraphics so StartGame can restore them after scene.clear().
+  // Kept dim on purpose — the arena's colored point lights carry the neon mood; these
+  // just lift the shadows enough to read the character/props without washing out the neon.
   SetupSceneLights() {
     this.scene.background = new THREE.Color(0x0d0d20)
-    this.scene.fog = new THREE.FogExp2(0x0d0d20, 0.012)
-    this.scene.add(new THREE.AmbientLight(0x4a3a7e, 1.1))
-    const dir = new THREE.DirectionalLight(0xbbaaff, 1.0)
+    this.scene.fog = new THREE.FogExp2(0x0d0d20, 0.02)
+    this.scene.add(new THREE.AmbientLight(0x2a2050, 0.6))
+    const dir = new THREE.DirectionalLight(0x9977dd, 0.55)
     dir.position.set(12, 24, 8)
     dir.castShadow = true
     dir.shadow.mapSize.set(1024, 1024)
@@ -329,7 +313,7 @@ class FPSGameApp {
     dir.shadow.camera.left = -30; dir.shadow.camera.right = 30
     dir.shadow.camera.top = 30; dir.shadow.camera.bottom = -30
     this.scene.add(dir)
-    this.scene.add(new THREE.HemisphereLight(0x5533bb, 0x221144, 0.7))
+    this.scene.add(new THREE.HemisphereLight(0x4433aa, 0x150a22, 0.4))
   }
 
   WindowResizeHanlder = () => {
