@@ -3,7 +3,7 @@ import Component from "../../Component.js";
 export default class PlayerHealth extends Component{
     constructor(){
         super();
-
+        this.name = 'PlayerHealth';
         this.health = 100;
     }
 
@@ -15,6 +15,8 @@ export default class PlayerHealth extends Component{
         const amount = (e && e.amount) ? e.amount : 10;
         this.health = Math.max(0, this.health - amount);
         this.uimanager.SetHealth(this.health);
+        // Taking damage bleeds the kill streak (combo).
+        this.director && this.director.OnPlayerDamaged();
 
         // Blood feedback on taking a hit: a world-space burst at the player's torso (visible in TPS)
         // plus a quick red screen vignette (covers FPS, where that burst sits behind the near plane).
@@ -30,10 +32,13 @@ export default class PlayerHealth extends Component{
         }
         this.blood && this.blood.Emit(origin, out, { scale: 0.7, count: 12, spread: 0.7 });
         this.uimanager.FlashDamage && this.uimanager.FlashDamage();
+        this.audio && this.audio.Play('player_hurt');
     }
 
     Initialize(){
         this.uimanager = this.FindEntity("UIManager").GetComponent("UIManager");
+        this.director = this.FindEntity("GameDirector")?.GetComponent("GameDirector") || null;
+        this.audio = this.FindEntity("Audio")?.GetComponent("AudioManager") || null;
         this.controls = this.GetComponent("PlayerControls");   // i-frames during the dodge roll
         // Shared blood-splatter burst. Optional — guarded at every use site — so tolerate a
         // level without a BloodFx (e.g. before the arena/FX are wired in the engine port).

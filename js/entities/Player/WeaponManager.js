@@ -45,6 +45,8 @@ export default class WeaponManager extends Component{
     Initialize(){
         this.hands = this.GetComponent('Hands');
         this.uimanager = this.FindEntity('UIManager').GetComponent('UIManager');
+        this.audio = this.FindEntity('Audio')?.GetComponent('AudioManager') || null;
+        this.director = this.FindEntity('GameDirector')?.GetComponent('GameDirector') || null;
         this.controls = this.GetComponent('PlayerControls');
         this.body = this.GetComponent('PlayerBody');
         // The funky projectile weapons spawn their sprite bolts through this (may be
@@ -218,6 +220,7 @@ export default class WeaponManager extends Component{
             projectileRadius: def.projectileRadius, projectileColor: def.projectileColor,
             bulletStyle: def.bulletStyle, knockback: def.knockback, spread: def.spread,
             aoe: def.aoe, aoeRadius: def.aoeRadius, fx: def.fx,
+            sound: def.sound, evolutionLevels: def.evolutionLevels,
         }));
         for(const weapon of this.weapons){
             weapon.owner = this.parent;
@@ -243,6 +246,7 @@ export default class WeaponManager extends Component{
             return;
         }
 
+        const isSwitch = this.activeIndex !== -1;   // skip the sound on the initial equip
         this.active && this.active.Holster();
 
         this.activeIndex = index;
@@ -272,6 +276,7 @@ export default class WeaponManager extends Component{
 
         weapon.RefreshUI();
         this.uimanager.SetWeaponName && this.uimanager.SetWeaponName(weapon.name);
+        if(isSwitch && this.audio){ this.audio.Play('weapon_switch'); }
     }
 
     CycleWeapon(dir){
@@ -382,7 +387,29 @@ export default class WeaponManager extends Component{
         this.uimanager.SetReticleSize(size);
     }
 
+    // Apply the score-gated evolution tier to every weapon (only mutates on a tier change).
+    // Raises damage/fireRate, recolours the bolt, and renames the gun (Mk.I/II/III).
+    ApplyEvolution(score){
+        for(const w of this.weapons){
+            if(!w.evolutionLevels) continue;
+            let tier = 0;
+            for(let l = w.evolutionLevels.length - 1; l >= 0; l--){
+                if(score >= w.evolutionLevels[l].scoreThreshold){ tier = l; break; }
+            }
+            if(tier === w.evolutionTier) continue;
+            w.evolutionTier = tier;
+            const ev = w.evolutionLevels[tier];
+            w.damage = ev.damage;
+            w.fireRate = ev.fireRate;
+            w.name = ev.name;
+            if(ev.color != null) w.projectileColor = ev.color;
+            if(w === this.active){ this.uimanager.SetWeaponName && this.uimanager.SetWeaponName(w.name); }
+        }
+    }
+
     Update(t){
+        if(this.director){ this.ApplyEvolution(this.director.state.score); }
+
         const weapon = this.active;
         if(!weapon){
             return;

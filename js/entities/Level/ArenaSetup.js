@@ -16,6 +16,10 @@ import { COLORS, NEON_PALETTE, createToonMaterial, addOutline } from '../Common/
 
 export const ARENA = {
   rooms: [], walls: [], spawnPoints: [], navPoints: [], group: null, playerSpawn: null,
+  // World Y of the visible standing surface. The designer floor prop sits ABOVE the synthetic
+  // room-shell floor (y=0); this is measured from it in generatePropColliders so the floor
+  // collider, ground splats, zombie feet + ragdoll all line up with the mesh the player sees.
+  floorY: 0,
 }
 
 const DEFAULT_KIT = 'CorridorKit'
@@ -41,6 +45,7 @@ export default class ArenaSetup extends Component {
     ARENA.walls.length = 0
     ARENA.spawnPoints.length = 0
     ARENA.navPoints.length = 0
+    ARENA.floorY = 0
 
     const d = this.levelData
     const group = new THREE.Group()
@@ -58,6 +63,7 @@ export default class ArenaSetup extends Component {
     ARENA.group = group
     group.updateMatrixWorld(true)
     this.generatePropColliders(group)
+    this.detectFloorY(group)
 
     ARENA.spawnPoints = (d.enemySpawns && d.enemySpawns.length)
       ? d.enemySpawns.map(s => ({ x: s.x, z: s.z }))
@@ -153,6 +159,7 @@ export default class ArenaSetup extends Component {
       const root = new THREE.Group()
       root.name = def.id || 'custom'
       root.userData.colliderKind = this.classifyPropCollider(def.asset)
+      root.userData.isFloor = /floor/.test((def.asset || '').toLowerCase())
       root.position.set(def.x ?? 0, def.y ?? 0, def.z ?? 0)
       root.rotation.set(def.rx ?? 0, def.ry ?? 0, def.rz ?? 0)
       let sx, sy, sz
@@ -205,6 +212,21 @@ export default class ArenaSetup extends Component {
     console.log(`[arena] fitted ${boxes} box + ${cyl} cylinder prop colliders`)
   }
 
+  // Measure the visible standing surface directly under the player spawn: a downward ray from
+  // high above it against the built arena. The highest hit below head height is the floor the
+  // player lands on (the designer floor prop, ABOVE the synthetic shell floor at y=0). Robust
+  // to raised floor-edge trim that a bbox-max heuristic would over-read.
+  detectFloorY(group) {
+    const s = this.levelData.playerSpawn || { x: this.room.cx, z: this.room.cz }
+    const ray = new THREE.Raycaster(new THREE.Vector3(s.x, 100, s.z), new THREE.Vector3(0, -1, 0))
+    ray.far = 200
+    const hits = ray.intersectObject(group, true)
+    let best = 0
+    for (const h of hits) { if (h.point.y <= 2.0 && h.point.y > best) best = h.point.y }
+    ARENA.floorY = best
+    console.log(`[arena] floor surface under spawn: y=${best.toFixed(3)}`)
+  }
+
   // Designer-authored AABB colliders (cx/cy/cz centre, w/h/d full extents).
   addColliders(defs) {
     let added = 0
@@ -230,7 +252,9 @@ export default class ArenaSetup extends Component {
   // --- Ammo static colliders (floor slab + every ARENA.walls entry). ---
   buildColliders() {
     const r = this.room
-    if (r) this._addStaticBox(r.cx, -0.5, r.cz, r.w / 2 + 2, 0.5, r.d / 2 + 2)
+    // Floor slab: 1 m thick, its TOP flush with the visible floor (ARENA.floorY) so the player
+    // capsule rests on the mesh it sees instead of sinking to y=0.
+    if (r) this._addStaticBox(r.cx, ARENA.floorY - 0.5, r.cz, r.w / 2 + 2, 0.5, r.d / 2 + 2)
     for (const w of ARENA.walls) {
       if (w.shape === 'cylinder') {
         this._addStaticCylinder(w.cx, w.cz, w.radius, w.minY, w.maxY)

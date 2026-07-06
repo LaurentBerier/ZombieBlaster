@@ -3,11 +3,23 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Zombie Blaster — TPS/FPS (engine port)</title>
+    <title>Zombie Blaster: Underground Monsters</title>
     <link rel="icon" href="data:," />
-    <!-- POC uses the template HUD/menu styling; the zombie title/menu identity is
-         restored in the M3 UI milestone (original markup kept in index.zombie.html). -->
-    <link rel="stylesheet" href="assets/css_ue/style.css" />
+    <!-- Zombie Blaster identity styling (title/HUD/game-over/menus). The FPS reticle + a
+         couple of engine-only bits are added inline below. -->
+    <link rel="stylesheet" href="css/style.css" />
+    <style>
+      /* The fade curtain is purely cosmetic — never let it intercept clicks (as a full-screen
+         z-index:2000 fixed div it otherwise eats every button press, even at opacity 0). */
+      #screen-fade { pointer-events: none !important; }
+      /* Engine-only: the camera-mode tag (written by PlayerControls) the zombie HUD lacks. */
+      #camera_mode {
+        position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
+        font: 700 13px/1 'Courier New', monospace; letter-spacing: 2px;
+        color: #7CFC00; text-shadow: 0 0 8px rgba(124,252,0,0.6); opacity: 0.7;
+        pointer-events: none; z-index: 30;
+      }
+    </style>
 
     <!--
       Buildless ES-module setup (Sandscape game format):
@@ -30,50 +42,115 @@
   </head>
 
   <body>
-    <div id="debug"></div>
-
-    <div id="menu">
-      <button id="start_game">NEW GAME</button>
-      <p class="hint">
-        WASD move &middot; Mouse look &middot; Shift sprint &middot; Space jump
-        &middot; <b>double-tap a move key</b> dodge &middot; R reload &middot;
-        <b>V</b> toggle TPS/FPS
-      </p>
+    <!-- Loading Screen (shown under the fade curtain while the level + entities build). -->
+    <div id="loading-screen" class="hidden">
+      <div class="loading-content">
+        <h1 class="game-title">ZOMBIE BLASTER</h1>
+        <h2 class="game-subtitle">UNDERGROUND MONSTERS</h2>
+        <div class="loading-bar-container">
+          <div class="loading-bar" id="loading-bar"></div>
+        </div>
+        <p class="loading-text" id="loading-text">INITIALIZING...</p>
+      </div>
     </div>
 
-    <!-- Red damage vignette, flashed by UIManager.FlashDamage when the player is hit. -->
-    <div id="blood_overlay"></div>
+    <!-- Title Screen -->
+    <div id="title-screen">
+      <div class="title-content">
+        <h1 class="game-title glitch">ZOMBIE BLASTER</h1>
+        <h2 class="game-subtitle">UNDERGROUND MONSTERS</h2>
+        <p class="tagline">"Clean up the mess. Save the Silo."</p>
+        <div class="menu-buttons">
+          <button class="btn-primary" id="btn-start">START GAME</button>
+          <button class="btn-secondary" id="btn-controls">CONTROLS</button>
+        </div>
+        <div class="high-score-display">
+          <span class="label">HIGH SCORE:</span>
+          <span class="value" id="title-high-score">0</span>
+        </div>
+      </div>
+    </div>
 
-    <div id="game_hud">
-      <div id="crosshair">
-        <span class="ch-tick ch-top"></span>
-        <span class="ch-tick ch-bottom"></span>
-        <span class="ch-tick ch-left"></span>
-        <span class="ch-tick ch-right"></span>
+    <!-- Controls Overlay -->
+    <div id="controls-overlay" class="hidden">
+      <div class="controls-content">
+        <h2>CONTROLS</h2>
+        <div class="control-list">
+          <div class="control-row"><span class="key">WASD</span><span class="action">MOVE</span></div>
+          <div class="control-row"><span class="key">MOUSE</span><span class="action">AIM</span></div>
+          <div class="control-row"><span class="key">LEFT CLICK</span><span class="action">FIRE</span></div>
+          <div class="control-row"><span class="key">SCROLL / 1-4</span><span class="action">SWAP WEAPON</span></div>
+          <div class="control-row"><span class="key">SPACE</span><span class="action">JUMP</span></div>
+          <div class="control-row"><span class="key">SHIFT</span><span class="action">SPRINT</span></div>
+          <div class="control-row"><span class="key">V</span><span class="action">TPS / FPS</span></div>
+          <div class="control-row"><span class="key">R</span><span class="action">RELOAD</span></div>
+        </div>
+        <button class="btn-primary" id="btn-close-controls">GOT IT!</button>
       </div>
-      <div id="weapon_name"></div>
-      <div id="ammo_container">
-        <span id="current_ammo">0</span>
-        <span>|</span>
-        <span id="max_ammo">0</span>
+    </div>
+
+    <!-- HUD -->
+    <div id="hud" class="hidden">
+      <div id="hud-top">
+        <div id="score-display">
+          <span class="label">SCORE</span>
+          <span class="value" id="hud-score">0</span>
+        </div>
+        <div id="combo-display">
+          <span class="combo-label" id="combo-label">COMBO</span>
+          <span class="combo-value" id="combo-multiplier">x1</span>
+        </div>
+        <div id="wave-display">
+          <span class="label">WAVE</span>
+          <span class="value" id="hud-wave">1</span>
+        </div>
       </div>
-      <div id="health_container">
-        <div id="health_progress"></div>
+      <div id="hud-bottom">
+        <div id="health-container">
+          <span class="label">HP</span>
+          <div class="bar-bg">
+            <div class="bar-fill health-fill" id="health-bar"></div>
+          </div>
+          <span class="bar-value" id="health-value">100</span>
+        </div>
+        <div id="weapon-display">
+          <span class="weapon-name" id="weapon-name">FRANKEN-GUN</span>
+          <span class="ammo-count" id="ammo-count">30/∞</span>
+        </div>
+      </div>
+      <div id="crosshair">+</div>
+      <div id="hit-marker" class="hidden">X</div>
+      <div id="damage-overlay" class="hidden"></div>
+      <div id="wave-announce" class="hidden">
+        <span class="wave-text" id="wave-announce-text">WAVE 1</span>
       </div>
       <div id="camera_mode">TPS</div>
     </div>
 
-    <div id="progress"></div>
-
-    <!-- Loading screen shown (under the fade curtain) between the menu and gameplay
-         while the level + entities are built. -->
-    <div id="loading">
-      <div class="spinner"></div>
-      <p>LOADING</p>
+    <!-- Game Over Screen -->
+    <div id="gameover-screen" class="hidden">
+      <div class="gameover-content">
+        <h1 class="gameover-title">GAME OVER</h1>
+        <div class="final-stats">
+          <div class="stat-row"><span class="label">FINAL SCORE</span><span class="value" id="final-score">0</span></div>
+          <div class="stat-row"><span class="label">WAVES SURVIVED</span><span class="value" id="final-waves">0</span></div>
+          <div class="stat-row"><span class="label">MAX COMBO</span><span class="value" id="final-combo">0</span></div>
+          <div class="stat-row"><span class="label">ENEMIES SLAIN</span><span class="value" id="final-kills">0</span></div>
+        </div>
+        <div class="high-score-display">
+          <span class="label">HIGH SCORE:</span>
+          <span class="value" id="gameover-high-score">0</span>
+        </div>
+        <div id="new-high-score" class="hidden">NEW HIGH SCORE!</div>
+        <div class="menu-buttons">
+          <button class="btn-primary" id="btn-retry">PLAY AGAIN</button>
+          <button class="btn-secondary" id="btn-menu">MAIN MENU</button>
+        </div>
+      </div>
     </div>
 
-    <!-- Full-screen black curtain used to cross-fade between onboarding states. -->
-    <div id="fade"></div>
+    <!-- Full-screen curtain used to cross-fade between onboarding states. -->
+    <div id="screen-fade" aria-hidden="true"></div>
 
     <script type="module" src="js/entry.js"></script>
   </body>

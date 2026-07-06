@@ -54,6 +54,12 @@ export default class Weapon{
         this.aoe = config.aoe ?? false;
         this.aoeRadius = config.aoeRadius ?? 0;
         this.fx = config.fx ?? null;
+        this.sound = config.sound ?? null;                    // procedural SFX key for the fire sound
+
+        // Score-gated evolution: WeaponManager applies the active tier's damage/fireRate/color/name.
+        this.baseName = name;
+        this.evolutionLevels = config.evolutionLevels ?? null;
+        this.evolutionTier = -1;   // -1 forces the first ApplyEvolution to stamp tier 0 (adds "Mk.I")
 
         this.shoot = false;
         this.shootTimer = 0.0;

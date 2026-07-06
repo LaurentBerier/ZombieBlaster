@@ -138,6 +138,7 @@ export default class ProjectileSystem extends Component {
     const level = this.FindEntity('Level')
     this.fx = level ? level.GetComponent('Fx') : null
     this.decals = level ? level.GetComponent('Decals') : null
+    this.audio = this.FindEntity('Audio')?.GetComponent('AudioManager') || null
 
     this.buildSpriteMaterials()
     this.buildPool()
@@ -290,6 +291,8 @@ export default class ProjectileSystem extends Component {
     u.prevPos.copy(this._origin)
     p.rotation.set(0, 0, 0)
     p.visible = true
+
+    if (this.audio) this.audio.Play(weapon.sound || 'weapon_fire')
   }
 
   // Splash damage nearby zombies at a detonation point (rocket AoE), with radial falloff.
@@ -298,7 +301,7 @@ export default class ProjectileSystem extends Component {
     for (const other of activeZombies) {
       if (!other.alive || other.dying) continue
       const ox = other.root.position.x - point.x
-      const oy = (other.hitCenterY ?? 1) - point.y
+      const oy = (other.root.position.y + (other.hitCenterY ?? 1)) - point.y
       const oz = other.root.position.z - point.z
       const d2 = ox * ox + oy * oy + oz * oz
       if (d2 < u.aoeRadius * u.aoeRadius) {
@@ -335,7 +338,7 @@ export default class ProjectileSystem extends Component {
       let hit = false
       for (const z of activeZombies) {
         if (!z.alive || z.dying) continue
-        const cx = z.root.position.x, cy = z.hitCenterY ?? 1.0, cz = z.root.position.z
+        const cx = z.root.position.x, cy = z.root.position.y + (z.hitCenterY ?? 1.0), cz = z.root.position.z
         const dx = p.position.x - cx, dy = p.position.y - cy, dz = p.position.z - cz
         const reach = (z.hitRadius || 0.7) + 0.3 + 0.5
         if (dx * dx + dy * dy + dz * dz < reach * reach) {
@@ -347,6 +350,7 @@ export default class ProjectileSystem extends Component {
             hitResult: { intersectionPoint: p.position.clone(), intersectionNormal: this._dir.clone().multiplyScalar(-1) },
           })
           if (this.fx) this.fx.SpawnGreenBloodImpact(p.position, { scale: 0.9 })
+          if (this.audio) this.audio.Play('hit_zombie')
           // Stamp the shader-projected body splat (rides the animation + ragdoll).
           if (this.decals && u.decalType) {
             this.decals.SpawnImpact(z, p.position, this._dir, u.decalType, { scaleMult: u.decalScale })
@@ -356,7 +360,7 @@ export default class ProjectileSystem extends Component {
             for (const other of activeZombies) {
               if (other === z || !other.alive || other.dying) continue
               const ox = other.root.position.x - p.position.x
-              const oy = (other.hitCenterY ?? 1) - p.position.y
+              const oy = (other.root.position.y + (other.hitCenterY ?? 1)) - p.position.y
               const oz = other.root.position.z - p.position.z
               const d2 = ox * ox + oy * oy + oz * oz
               if (d2 < u.aoeRadius * u.aoeRadius) {
@@ -376,11 +380,12 @@ export default class ProjectileSystem extends Component {
       // no longer pass through walls/floor. Only sprite-bullet weapons ('green'/'blue') leave a
       // splat; rockets additionally detonate (AoE) on wall impact.
       const prev = u.prevPos
+      const groundY = ARENA.floorY ?? GROUND_Y   // splat/stop on the visible floor, not y=0
       let bestT = Infinity, groundHit = false, wallHit = false, hitWall = null
 
-      if (u.velocity.y < -0.001 && prev.y > GROUND_Y && p.position.y <= GROUND_Y) {
+      if (u.velocity.y < -0.001 && prev.y > groundY && p.position.y <= groundY) {
         const denom = prev.y - p.position.y
-        const tGround = denom > 0.0001 ? (prev.y - GROUND_Y) / denom : 1
+        const tGround = denom > 0.0001 ? (prev.y - groundY) / denom : 1
         bestT = Math.max(0, Math.min(1, tGround))
         groundHit = true
       }
@@ -394,7 +399,7 @@ export default class ProjectileSystem extends Component {
 
       if (groundHit) {
         _impactPoint.lerpVectors(prev, p.position, bestT)
-        _impactPoint.y = GROUND_Y
+        _impactPoint.y = groundY
         if (u.impactStyle && this.fx) {
           this.fx.SpawnEnvironmentSplat(_impactPoint, { normal: _GROUND_NORMAL, scale: 0.62, blue: u.impactStyle === 'blue' })
         }

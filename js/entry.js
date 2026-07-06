@@ -37,6 +37,8 @@ import ZombieSpawner from './entities/NPC/ZombieSpawner.js'
 import ProjectileSystem from './entities/Weapons/ProjectileSystem.js'
 import Fx from './entities/Fx/Fx.js'
 import Decals from './entities/Fx/Decals.js'
+import GameDirector from './entities/Game/GameDirector.js'
+import AudioManager from './entities/Audio/AudioManager.js'
 import { WEAPON_DEFS, WEAPON_GLBS } from './entities/Weapons/weaponDefs.js'
 import { adaptClipToPreOriented } from './entities/Common/UeMannequin.js'
 
@@ -74,9 +76,10 @@ const ak47 = 'assets/guns/ak47/ak47.glb'
 const muzzleFlash = 'assets/muzzle_flash.glb'
 const ak47Shot = 'assets/sounds/ak47_shot.wav'
 
-// Onboarding fade timings (must match #fade opacity transition in the CSS).
-const FADE_MS = 600
+// Onboarding fade timings (must match #screen-fade opacity transition in css/style.css: 420ms).
+const FADE_MS = 440
 const MIN_LOADING_MS = 700
+const HIGH_SCORE_KEY = 'zombieBlasterHighScore'
 
 class FPSGameApp {
   constructor() {
@@ -151,24 +154,61 @@ class FPSGameApp {
   }
 
   OnProgress(p) {
-    const bar = document.getElementById('progress')
+    const bar = document.getElementById('loading-bar')
     if (bar) bar.style.width = `${p}%`
   }
 
   HideProgress() { this.OnProgress(0) }
 
   SetupStartButton() {
-    document.getElementById('start_game').addEventListener('click', this.StartGame)
+    document.getElementById('btn-start')?.addEventListener('click', this.StartGame)
+    document.getElementById('btn-retry')?.addEventListener('click', this.StartGame)
+    document.getElementById('btn-menu')?.addEventListener('click', this.QuitToMenu)
+    // Controls overlay (simple show/hide).
+    const controls = document.getElementById('controls-overlay')
+    document.getElementById('btn-controls')?.addEventListener('click', () => controls?.classList.remove('hidden'))
+    document.getElementById('btn-close-controls')?.addEventListener('click', () => controls?.classList.add('hidden'))
   }
 
-  ShowMenu(visible = true) { document.getElementById('menu').style.visibility = visible ? 'visible' : 'hidden' }
-  ShowLoading(visible = true) { document.getElementById('loading').style.visibility = visible ? 'visible' : 'hidden' }
+  _toggleHidden(id, visible) { const el = document.getElementById(id); if (el) el.classList.toggle('hidden', !visible) }
+  ShowMenu(visible = true) { this._toggleHidden('title-screen', visible) }
+  ShowLoading(visible = true) { this._toggleHidden('loading-screen', visible) }
+
+  RefreshTitleHighScore() {
+    let hs = 0
+    try { hs = parseInt(window.localStorage.getItem(HIGH_SCORE_KEY) || '0', 10) || 0 } catch (e) { /* private mode */ }
+    const el = document.getElementById('title-high-score')
+    if (el) el.innerText = hs.toLocaleString()
+  }
 
   FadeTo(opaque) {
-    document.getElementById('fade').style.opacity = opaque ? '1' : '0'
+    document.getElementById('screen-fade').style.opacity = opaque ? '1' : '0'
     return new Promise(res => setTimeout(res, FADE_MS))
   }
   Delay(ms) { return new Promise(res => setTimeout(res, ms)) }
+
+  // Called by the GameDirector when the player dies: reveal the game-over screen + free the
+  // cursor so the retry/menu buttons are clickable.
+  OnGameOver = (state) => {
+    const ui = this.entityManager?.Get('UIManager')?.GetComponent('UIManager')
+    ui && ui.ShowGameOver(state)
+    if (document.exitPointerLock) document.exitPointerLock()
+  }
+
+  // Back to the title screen from the game-over screen.
+  QuitToMenu = async () => {
+    if (this.starting) return
+    this.entityManager?.Get('Audio')?.GetComponent('AudioManager')?.StopMusic()
+    await this.FadeTo(true)
+    window.cancelAnimationFrame(this.animFrameId)
+    this._toggleHidden('gameover-screen', false)
+    this._toggleHidden('hud', false)
+    this.scene.clear()
+    this.renderer.render(this.scene, this.camera)
+    this.RefreshTitleHighScore()
+    this.ShowMenu(true)
+    await this.FadeTo(false)
+  }
 
   async LoadAssets() {
     const gltfLoader = new GLTFLoader()
@@ -303,6 +343,8 @@ class FPSGameApp {
     }
 
     this.HideProgress()
+    this.RefreshTitleHighScore()
+    this.assetsReady = true
     this.ShowMenu()
     await this.FadeTo(false)
   }
@@ -350,7 +392,22 @@ class FPSGameApp {
     uimanagerEntity.AddComponent(new UIManager())
     this.entityManager.Add(uimanagerEntity)
 
-    // Zombie population (spawns at runtime from the arena spawn points, up to a cap).
+    // Audio: procedural SFX + the music playlist. Looked up as GetComponent('AudioManager').
+    const audioEntity = new Entity()
+    audioEntity.SetName('Audio')
+    audioEntity.AddComponent(new AudioManager())
+    this.entityManager.Add(audioEntity)
+
+    // The gameplay brain: score/combo/high-score + the wave/spawn director + game-over.
+    const directorEntity = new Entity()
+    directorEntity.SetName('GameDirector')
+    const director = new GameDirector()
+    director.onGameOver = this.OnGameOver
+    directorEntity.AddComponent(director)
+    this.entityManager.Add(directorEntity)
+
+    // Zombie population — driven wave-by-wave by the GameDirector (the maxAlive/interval only
+    // apply to the director-less POC fallback).
     const spawnerEntity = new Entity()
     spawnerEntity.SetName('ZombieSpawner')
     spawnerEntity.AddComponent(new ZombieSpawner(this.zombieAssets, this.scene, this.physicsWorld, { maxAlive: 8, interval: 1.6 }))
@@ -362,10 +419,13 @@ class FPSGameApp {
   }
 
   StartGame = async () => {
-    if (this.starting) { return }
+    if (this.starting || !this.assetsReady) { return }
     this.starting = true
     await this.FadeTo(true)
+    // Hide the title + any lingering game-over screen (retry path).
     this.ShowMenu(false)
+    this._toggleHidden('gameover-screen', false)
+    document.getElementById('controls-overlay')?.classList.add('hidden')
     this.ShowLoading(true)
     await this.FadeTo(false)
 
@@ -377,6 +437,11 @@ class FPSGameApp {
     this.SetupPhysics()
     await this.Delay(0)
     this.EntitySetup()
+
+    // Kick off the soundtrack (the START click is the gesture that opens the autoplay gate).
+    const audio = this.entityManager.Get('Audio')?.GetComponent('AudioManager')
+    if (audio) { audio.Resume(); audio.StartMusic() }
+
     await this.Delay(MIN_LOADING_MS)
 
     await this.FadeTo(true)

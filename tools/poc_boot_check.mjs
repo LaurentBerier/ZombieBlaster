@@ -25,7 +25,7 @@ try {
 
   log('loading http://127.0.0.1:' + PORT + '/index.html ...');
   await page.goto(`http://127.0.0.1:${PORT}/index.html`, { waitUntil: 'networkidle2', timeout: 120000 });
-  await page.evaluate(() => document.getElementById('start_game')?.click());
+  await page.evaluate(() => document.getElementById('btn-start')?.click());
   try {
     await page.waitForFunction(
       () => window._APP && window._APP.entityManager && window._APP.entityManager.entities.length >= 2,

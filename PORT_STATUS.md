@@ -45,6 +45,8 @@ New/ported code (all under `js/entities/`):
 - **Full arsenal (M2)** — Franken-Gun / Bowling Launcher / Soda Laser / Cryo Blaster, switchable (1–4/wheel), each a distinct visible GLB on the hand at its own grip, own projectile type/colour/mag/knockback/status, rocket AoE. Franken grip tuned.
 - **Hit FX** — green-blood sprite-sheet impact burst on hits.
 - **Decal system** — DONE (both parts; see below). Verify with `tools/poc_decals_probe.mjs`.
+- **M3 gameplay + identity** — DONE (see below). Verify with `tools/poc_gamedir_probe.mjs`,
+  `poc_hud_probe.mjs`, `poc_evolution_probe.mjs`.
 
 ## WHAT'S LEFT
 
@@ -76,11 +78,40 @@ the ragdoll; bolts land on walls/floor instead of tunnelling):
    `getCylinderImpactSurface`), so a bolt lands + splats where it hits and rockets detonate (AoE)
    on wall impact. Only the sprite-bullet guns (green Franken / blue Soda) leave env splats.
 
-### Milestones after decals (NOW NEXT: M3)
-- **M3 — gameplay + identity:** wave/combo/score/high-score (port `gameLogic.js` + the
-  `enemies.js` wave/boss spawner into a `Game/GameDirector`); the Zombie Blaster HUD +
-  title/menu screens + audio (SFX + the 2 music tracks) replacing the template's; game-over/
-  retry. Unlocks weapon **evolution tiers** (they key off score).
+### ✅ M3 — gameplay + identity — DONE
+Verified headless (0 errors) across `poc_gamedir_probe` / `poc_hud_probe` / `poc_evolution_probe`.
+- **GameDirector** (`js/entities/Game/GameDirector.js`, on the `GameDirector` entity) — ports
+  gameLogic.js score/combo + the enemies.js wave director. Score is `value*multiplier`; the
+  killStreak-stepped multiplier (≥3→x2 … ≥20→x8) hard-resets after a 3s no-kill window; high
+  score persists to `localStorage['zombieBlasterHighScore']`. Waves: `min(5+wave*3, 40)` zombies
+  at `max(0.3, 1.5-wave*0.08)` cadence, 3s between waves, ENDLESS (death is the only game-over).
+  `ZombieController.Die()` calls `ReportKill()`; `PlayerHealth.TakeHit()` calls `OnPlayerDamaged()`.
+- **Wave-driven spawner** — `ZombieSpawner` now yields control to the director (its old timer is
+  the director-less POC fallback); `spawnOne(stats)` takes per-wave scaled stats. NOTE: only
+  Zombie_1 is loaded, so waves spawn the regular zombie scaled by wave; boss/fast/tank types land
+  in M4.
+- **HUD / menu identity** — `index.html` restored to the zombie markup (title/HUD/game-over/controls/
+  loading/fade) on `css/style.css`; `UIManager` rewritten to drive score/combo/wave/health/ammo +
+  the wave-announce banner + the game-over screen. `entry.js` onboarding rewired to the zombie
+  screens (`title-screen`/`loading-screen`/`screen-fade`/`hud`/`gameover-screen`) with a working
+  START → play → death → PLAY AGAIN / MAIN MENU flow. (Kept `#camera_mode`, written by PlayerControls.
+  Also fixed: `PlayerHealth` never set `this.name`, so it was unfindable via `GetComponent`.)
+- **Audio** (`js/entities/Audio/AudioManager.js`, on the `Audio` entity) — ports audio.js: procedural
+  Web-Audio SFX (no sound files) + the 2-track music playlist via an `<audio>` element; mixer settings
+  persist to `zb_audio_settings`. Wired: fire (per-weapon `sound`), hit_zombie, enemy_death+combo_ding,
+  wave_start, player_hurt, weapon_switch, game_over (+ music start/stop). `Growl()` ported but not yet
+  called (a polish hook).
+- **Evolution tiers** — `weaponDefs.js` gains `evolutionLevels` (0/2000/5000 thresholds) + a `sound`
+  key per gun; `WeaponManager.ApplyEvolution(score)` (polled from the director each frame) raises
+  damage/fireRate, recolours the bolt, and renames the gun Mk.I/II/III. (Also fixed: `BuildLoadout`
+  wasn't passing `sound` through to the `Weapon`.)
+
+### M3 follow-ups (deferred, beyond the M3 spec)
+- Pause screen + settings/audio-mixer overlay (markup + button wiring) — not in the current `index.html`.
+- Ambient/attack zombie growls (call `AudioManager.Growl()` from `ZombieController`).
+- Damage-number / kill popups / death-splat VFX; combo-pulse HUD animation; boss/wave-boss announces.
+
+### Milestones after M3
 - **M4 — new enemies:** the template's beast (`CharacterController`) + UE soldier
   (`UeSoldierController`) as extra types. Needs an **arena navmesh** for the corridor
   (their AI is navmesh-driven) + factions + drop-weapon. Also give zombies an **Ammo hit

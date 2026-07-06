@@ -89,6 +89,8 @@ export default class ZombieController extends Component {
     // a minimal harness — the splats are then simply skipped).
     const level = this.FindEntity('Level')
     this.decals = level ? level.GetComponent('Decals') : null
+    // The gameplay brain that tallies kills/score (absent in the bare POC harness).
+    this.director = this.FindEntity('GameDirector')?.GetComponent('GameDirector') || null
 
     this.buildModel()
     if (this.decals) this.decals.PrepareEnemy(this)
@@ -177,6 +179,9 @@ export default class ZombieController extends Component {
     const i = activeZombies.indexOf(this)
     if (i !== -1) activeZombies.splice(i, 1)
 
+    // Tally the kill (score + combo + wave progress). All death paths funnel through Die().
+    if (this.director) this.director.ReportKill(this.scoreValue, this.root.position)
+
     // Knock the corpse away from the shooter.
     const impulse = new THREE.Vector3(0, 2.6, 0)
     const from = msg && msg.from && msg.from.Position ? msg.from.Position : null
@@ -190,7 +195,7 @@ export default class ZombieController extends Component {
     try {
       if (this.skinnedMesh) {
         this.ragdoll = new Ragdoll(this.skinnedMesh, {
-          groundY: 0, impulse, twist, physicsWorld: this.world,
+          groundY: ARENA.floorY, impulse, twist, physicsWorld: this.world,
         })
       }
     } catch (e) {
