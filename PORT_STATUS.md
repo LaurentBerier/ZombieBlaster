@@ -44,36 +44,39 @@ New/ported code (all under `js/entities/`):
 - **Zombies + ragdoll** — Zombie_1 chases (walk/attack/death crossfades) and **physics-ragdolls on death**; status effects (shock/freeze slow, burn/corrode DoT).
 - **Full arsenal (M2)** — Franken-Gun / Bowling Launcher / Soda Laser / Cryo Blaster, switchable (1–4/wheel), each a distinct visible GLB on the hand at its own grip, own projectile type/colour/mag/knockback/status, rocket AoE. Franken grip tuned.
 - **Hit FX** — green-blood sprite-sheet impact burst on hits.
+- **Decal system** — DONE (both parts; see below). Verify with `tools/poc_decals_probe.mjs`.
 
 ## WHAT'S LEFT
 
-### ⭐ Decal system (requested next) — NOT yet ported
-Two parts, both currently missing:
+### ✅ Decal system (was "requested next") — DONE
+Both parts ported and verified headless (0 shader-compile errors on r127; body splat rides
+the ragdoll; bolts land on walls/floor instead of tunnelling):
 
-1. **Enemy body decals (the crown jewel)** — the shader-projected SKINNED splats from
-   the original `js/decals.js`: enemy materials patched via `onBeforeCompile` with up to
-   8 projector slots each, rebuilt from the nearest bone's `matrixWorld` every frame, so
-   the splat **rides the animation AND the ragdoll**. Port `decals.js` as a `Fx/Decals.js`
-   component (or extend `Fx`): `prepareEnemyDecalMaterials(zombie)` on build
-   (`ZombieController.buildModel` → call it), `spawnImpactDecal(zombie, point, dir, type)`
-   on hit (`ProjectileSystem` hit block), `updateDecals(dt)` each frame, and
-   `disposeEnemyDecalMaterials` on despawn. r127 chunk names (`<skinning_vertex>`,
-   `<map_fragment>`, metalness) match r129, so the GLSL injection should port ~verbatim;
-   a shell/DecalGeometry fallback exists in the source. The `ZombieController` already
-   caches `impactBones` + `skinnedMesh` (the contract decals.js needs). Per-weapon
-   `fx.decalType` (blood/burn/plasma/slime) is already in `weaponDefs.js`.
+1. **Enemy body decals** — `js/entities/Fx/Decals.js`, a `Component` on the `Level` entity.
+   Ports the shader-projected SKINNED splats from the old `js/decals.js`: zombie materials
+   patched via `onBeforeCompile` with 8 projector slots each, the projector rebuilt from the
+   nearest bone's `matrixWorld` every frame (rides walk/attack + the death ragdoll). Fully
+   PROCEDURAL comic-paint atlas (no art assets). Public API: `PrepareEnemy(zombie)`,
+   `SpawnImpact(zombie, point, dir, type, opts)`, `DisposeEnemy(bodyGroup)`, `Update(dt)`.
+   The unused static-target `DecalGeometry` path from the source was dropped (zombies are
+   always skinned with `impactBones` → shader path); a curved bone-shell fallback is kept.
+   Chose this over the template's `Common/BloodDecals.js` (generic red DecalGeometry blood)
+   because the game's art wants per-weapon COLOURED opaque paint (green/burn/blue/cyan).
+   Wiring: `ZombieController.buildModel` now populates `impactBones` (the handoff wrongly
+   said it already did) + caches the `Decals` ref and calls `PrepareEnemy`/`DisposeEnemy`;
+   `weaponDefs.js` now carries `fx.decalType` + `fx.decalScale` per gun (also was NOT there
+   before — added: Franken→blood/1.0, Bowling→burn/1.7, Soda→plasma/0.9, Cryo→slime/1.0);
+   `ProjectileSystem` hit block calls `SpawnImpact`.
 
-2. **Wall / floor splats (environment)** — bolts that hit a wall or the floor should stamp
-   a coloured splat (green Franken / blue Soda), from the original `spawnFrankenImpactDecal`
-   (`effects.js`, uses `assets/FX/Blood_decal_1.png` / `Blood_Decal_2.png`). Requires:
-   - Port `spawnFrankenImpactDecal` into `Fx/Fx.js` (a pooled billboarded/oriented plane).
-   - **Add wall/ground collision to the projectile flight** in `ProjectileSystem.Update`:
-     bolts currently only die on `y<=0.03` / lifetime and **pass through walls**. Port the
-     original segment-vs-AABB / segment-vs-cylinder tests against `ARENA.walls` (see
-     `weapons.js` `segmentAABBEntryT` / `segmentCylinderEntryT`) so a bolt stamps a splat
-     where it actually lands on a wall/prop/floor, then deactivates.
+2. **Wall / floor splats (environment)** — `Fx.SpawnEnvironmentSplat(pos, {normal, scale, blue})`
+   ports `spawnFrankenImpactDecal` (pooled oriented plane, `Blood_decal_1/2.png`, RGB-rotated
+   to blue for Soda; textures preloaded in `entry.js` as `decal1`/`decal2`). `ProjectileSystem.Update`
+   now runs segment-vs-AABB / segment-vs-cylinder + ground-plane collision against `ARENA.walls`
+   each frame (ported `segmentAABBEntryT` / `segmentCylinderEntryT` / `getWallImpactSurface` /
+   `getCylinderImpactSurface`), so a bolt lands + splats where it hits and rockets detonate (AoE)
+   on wall impact. Only the sprite-bullet guns (green Franken / blue Soda) leave env splats.
 
-### Milestones after decals
+### Milestones after decals (NOW NEXT: M3)
 - **M3 — gameplay + identity:** wave/combo/score/high-score (port `gameLogic.js` + the
   `enemies.js` wave/boss spawner into a `Game/GameDirector`); the Zombie Blaster HUD +
   title/menu screens + audio (SFX + the 2 music tracks) replacing the template's; game-over/

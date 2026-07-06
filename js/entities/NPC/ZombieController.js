@@ -72,6 +72,10 @@ export default class ZombieController extends Component {
     this.activeAnim = null
     this.skinnedMesh = null
     this.headBone = null
+    // Skeleton bones the impact-decal system anchors splats to (all bones but the Armature
+    // root). Populated in buildModel; read by Decals.SpawnImpact to pick the nearest bone.
+    this.impactBones = []
+    this.decals = null
     this.ragdoll = null
   }
 
@@ -81,7 +85,13 @@ export default class ZombieController extends Component {
     this.root.rotation.y = Math.random() * Math.PI * 2
     this.scene.add(this.root)
 
+    // The shader-projected impact-decal system lives on the 'Level' entity (may be absent in
+    // a minimal harness — the splats are then simply skipped).
+    const level = this.FindEntity('Level')
+    this.decals = level ? level.GetComponent('Decals') : null
+
     this.buildModel()
+    if (this.decals) this.decals.PrepareEnemy(this)
 
     this.parent.RegisterEventHandler(this.TakeHit, 'hit')
     activeZombies.push(this)
@@ -111,6 +121,8 @@ export default class ZombieController extends Component {
     model.traverse(child => {
       child.frustumCulled = false            // skinned-sphere culling wrongly hides close zombies
       if (child.isSkinnedMesh && !this.skinnedMesh) this.skinnedMesh = child
+      // Cache every real bone (skip the Armature root) for decal anchoring.
+      if (child.isBone && child.name !== 'Armature') this.impactBones.push(child)
     })
     this.headBone = model.getObjectByName('Head') || null
     this.bodyGroup.add(model)
@@ -352,6 +364,8 @@ export default class ZombieController extends Component {
   Dispose() {
     const i = activeZombies.indexOf(this)
     if (i !== -1) activeZombies.splice(i, 1)
+    // Drop this body's splats + release the per-enemy patched material clones.
+    if (this.decals) { try { this.decals.DisposeEnemy(this.bodyGroup) } catch (e) { /* noop */ } }
     if (this.ragdoll) { try { this.ragdoll.dispose() } catch (e) { /* noop */ } }
     if (this.root.parent) this.root.parent.remove(this.root)
   }

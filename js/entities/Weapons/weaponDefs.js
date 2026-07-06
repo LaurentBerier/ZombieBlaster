@@ -22,7 +22,7 @@ export const WEAPON_DEFS = [
     projectileType: 'plasma', projectileSpeed: 45, projectileRadius: 0.18, spread: 0.02,
     projectileColor: 0x7FFF00, bulletStyle: 'green', knockback: 3.0,
     grip: grip(-22.2, -4.4, 0.7, 90, -20, 362),
-    fx: { element: 'shock', status: { type: 'shock', duration: 0.4, dps: 0 } },
+    fx: { element: 'shock', status: { type: 'shock', duration: 0.4, dps: 0 }, decalType: 'blood', decalScale: 1.0 },
   },
   {
     name: 'BOWLING LAUNCHER', glbKey: 'bowlingGun',
@@ -30,7 +30,7 @@ export const WEAPON_DEFS = [
     projectileType: 'rocket', projectileSpeed: 22, projectileRadius: 0.3, spread: 0.0,
     projectileColor: 0xFF7F00, bulletStyle: null, knockback: 6.0, aoe: true, aoeRadius: 3.5,
     grip: grip(-22.2, -4.4, 0.7, 90, -20, 362),
-    fx: { element: 'fire', status: { type: 'burn', duration: 2.5, dps: 8 }, splash: 'explosion', explosionRadius: 3.5 },
+    fx: { element: 'fire', status: { type: 'burn', duration: 2.5, dps: 8 }, splash: 'explosion', explosionRadius: 3.5, decalType: 'burn', decalScale: 1.7 },
   },
   {
     name: 'SODA LASER', glbKey: 'sodaGun',
@@ -39,7 +39,7 @@ export const WEAPON_DEFS = [
     projectileColor: 0x3a86ff, bulletStyle: 'blue', knockback: 0.8,
     grip: grip(-22.2, -4.4, 0.7, 90, -20, 362),
     fx: { element: 'acid', status: { type: 'corrode', duration: 1.5, dps: 3 }, splash: 'liquid',
-      acidPoolChance: 0.3, acidPoolRadius: 1.2, acidPoolDuration: 2.0, acidPoolDps: 5 },
+      acidPoolChance: 0.3, acidPoolRadius: 1.2, acidPoolDuration: 2.0, acidPoolDps: 5, decalType: 'plasma', decalScale: 0.9 },
   },
   {
     name: 'CRYO BLASTER', glbKey: 'cryoGun',
@@ -47,7 +47,7 @@ export const WEAPON_DEFS = [
     projectileType: 'blob', projectileSpeed: 32, projectileRadius: 0.18, spread: 0.02,
     projectileColor: 0x00FFFF, bulletStyle: null, knockback: 0.6,
     grip: grip(-22.2, -4.4, 0.7, 90, -20, 362),
-    fx: { element: 'freeze', status: { type: 'freeze', duration: 0.5, dps: 0 }, splash: 'liquid', splashCount: 6 },
+    fx: { element: 'freeze', status: { type: 'freeze', duration: 0.5, dps: 0 }, splash: 'liquid', splashCount: 6, decalType: 'slime', decalScale: 1.0 },
   },
 ]
 

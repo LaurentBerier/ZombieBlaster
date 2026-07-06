@@ -36,6 +36,7 @@ import ArenaSetup from './entities/Level/ArenaSetup.js'
 import ZombieSpawner from './entities/NPC/ZombieSpawner.js'
 import ProjectileSystem from './entities/Weapons/ProjectileSystem.js'
 import Fx from './entities/Fx/Fx.js'
+import Decals from './entities/Fx/Decals.js'
 import { WEAPON_DEFS, WEAPON_GLBS } from './entities/Weapons/weaponDefs.js'
 import { adaptClipToPreOriented } from './entities/Common/UeMannequin.js'
 
@@ -61,6 +62,9 @@ const frankenGun = 'assets/Weapons/1_Neon_Biohazard_Blaste_0415181024_texture.gl
 const frankenSheet = 'assets/FX/LiquidSpriteSheet2.png'
 // Green-blood impact burst spritesheet (8-frame 4x2 atlas) — the on-hit VFX.
 const greenBloodSheet = 'assets/FX/Green_Spill_juice_SpriteSheet3.png'
+// Environment splat art (wall/floor bolt marks) — RGB-rotated to blue for the Soda Laser.
+const decalSplat1 = 'assets/FX/Blood_decal_1.png'
+const decalSplat2 = 'assets/FX/Blood_Decal_2.png'
 
 // Third-person weapon (socketed to the hand) + its magazine-reload clip.
 const ak47Tps = 'assets/guns/New/SK_AK47.FBX'
@@ -221,6 +225,8 @@ class FPSGameApp {
     }
     promises.push(this.AddAsset(frankenSheet, texLoader, 'frankenSheet'))
     promises.push(this.AddAsset(greenBloodSheet, texLoader, 'greenBloodSheet'))
+    promises.push(this.AddAsset(decalSplat1, texLoader, 'decal1'))
+    promises.push(this.AddAsset(decalSplat2, texLoader, 'decal2'))
 
     await this.PromiseProgress(promises, this.OnProgress)
 
@@ -309,7 +315,10 @@ class FPSGameApp {
     const levelEntity = new Entity()
     levelEntity.SetName('Level')
     levelEntity.AddComponent(new ArenaSetup(this.scene, this.physicsWorld, this.levelData, this.propCache, this.kitMap))
-    levelEntity.AddComponent(new Fx(this.scene, this.assets['greenBloodSheet']))
+    levelEntity.AddComponent(new Fx(this.scene, this.assets['greenBloodSheet'], this.assets['decal1'], this.assets['decal2']))
+    // Shader-projected impact splats on the zombies (procedural art; needs the camera for the
+    // fallback hit direction). Zombie/Projectile components look it up as GetComponent('Decals').
+    levelEntity.AddComponent(new Decals(this.scene, this.camera))
     this.entityManager.Add(levelEntity)
 
     const playerEntity = new Entity()
